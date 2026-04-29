@@ -1,635 +1,830 @@
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>段考出缺席回報系統</title>
+import React, { useState, useRef, useEffect } from 'react';
+import { ClipboardList, Users, CheckCircle, AlertTriangle, Clock, Send, XCircle, Camera, Plus, Trash2, Settings, Link as LinkIcon, Copy, Eye, CalendarClock, MessageSquare, FileText, Info, X } from 'lucide-react';
+
+// === 產生學校所有班級的輔助函式 ===
+const generateClasses = () => {
+  const hsGrades = ['三', '二', '一'];
+  const hsNames = ['忠', '孝', '仁'];
+  const jhGrades = ['三', '二', '一'];
+  const jhNames = ['忠', '孝', '仁', '愛', '信', '義', '和', '平'];
+
+  const classes = [];
+  // 產生高中班級
+  hsGrades.forEach(g => {
+    hsNames.forEach((n, idx) => {
+      classes.push({ id: `H${g}-${idx}`, group: `高${g}`, name: `高${g}${n}`, status: 'pending', detail: '', absentData: [], isActive: true });
+    });
+  });
+  // 產生國中班級
+  jhGrades.forEach(g => {
+    jhNames.forEach((n, idx) => {
+      classes.push({ id: `J${g}-${idx}`, group: `國${g}`, name: `國${g}${n}`, status: 'pending', detail: '', absentData: [], isActive: true });
+    });
+  });
+  return classes;
+};
+
+const App = () => {
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const boardRef = useRef(null); 
   
-  <!-- 載入必要的網頁套件 -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  // 初始化狀態
+  const [records, setRecords] = useState(generateClasses());
+  const [notification, setNotification] = useState('');
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportTimeStr, setExportTimeStr] = useState(''); 
+  const [previewImage, setPreviewImage] = useState(null); // [新增] 用於儲存預覽圖片
+  const [showResetConfirm, setShowResetConfirm] = useState(false); // [新增] 控制重置警告視窗
 
-  <style>
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
-    body { font-family: 'Helvetica Neue', Helvetica, Arial, '微軟正黑體', sans-serif; }
-  </style>
-</head>
-<body>
-  <div id="root"></div>
+  const [examConfig, setExamConfig] = useState({
+    title: '114-2 第1次定期評量',
+    subtitle: '第一天'
+  });
+  const [generatedLink, setGeneratedLink] = useState('');
+  const [isTeacherMode, setIsTeacherMode] = useState(false); 
 
-  <script type="text/babel" data-type="module">
-    import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
-    import { getAuth, signInAnonymously, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
-    import { getFirestore, doc, setDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+  // 收回考卷的年段設定
+  const [collectPaperGrades, setCollectPaperGrades] = useState({
+    '高三': false, '高二': false, '高一': false,
+    '國三': false, '國二': false, '國一': false
+  });
 
-    const { useState, useRef, useEffect } = React;
+  // 動態載入 html2canvas
+  useEffect(() => {
+    if (!window.html2canvas) {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+      script.async = true;
+      document.body.appendChild(script);
+    }
+  }, []);
 
-    // === 您的 Firebase 金鑰 ===
-    const firebaseConfig = {
-      apiKey: "AIzaSyBJr9E7Rz2vduTDy8qiswq8dqCpZjLqkJw",
-      authDomain: "ynhs-test.firebaseapp.com",
-      projectId: "ynhs-test",
-      storageBucket: "ynhs-test.firebasestorage.app",
-      messagingSenderId: "356400350765",
-      appId: "1:356400350765:web:fc97569fbf2cbaf53a9aa4",
-      measurementId: "G-YTZJRLQ90H"
-    };
+  const activeRecords = records.filter(r => r.isActive);
 
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const db = getFirestore(app);
+  // 表單狀態
+  const [selectedClass, setSelectedClass] = useState('H3-0'); 
+  const [attendanceMode, setAttendanceMode] = useState('all_present'); 
+  const [absentList, setAbsentList] = useState([{ seatNumber: '', name: '', leaveType: '事假' }]);
 
-    // === 圖示元件 ===
-    const Icon = ({ name, className = '', size = 16 }) => {
-      const fontSize = typeof size === 'number' ? `${size}px` : size;
-      return <i className={`fa-solid fa-${name} ${className}`} style={{ fontSize }}></i>;
-    };
-    const ClipboardList = (props) => <Icon name="clipboard-list" {...props} />;
-    const Users = (props) => <Icon name="users" {...props} />;
-    const CheckCircle = (props) => <Icon name="circle-check" {...props} />;
-    const AlertTriangle = (props) => <Icon name="triangle-exclamation" {...props} />;
-    const Clock = (props) => <Icon name="clock" {...props} />;
-    const Send = (props) => <Icon name="paper-plane" {...props} />;
-    const XCircle = (props) => <Icon name="circle-xmark" {...props} />;
-    const Camera = (props) => <Icon name="camera" {...props} />;
-    const Plus = (props) => <Icon name="plus" {...props} />;
-    const Trash2 = (props) => <Icon name="trash-can" {...props} />;
-    const Settings = (props) => <Icon name="gear" {...props} />;
-    const LinkIcon = (props) => <Icon name="link" {...props} />;
-    const Copy = (props) => <Icon name="copy" {...props} />;
-    const Eye = (props) => <Icon name="eye" {...props} />;
-    const CalendarClock = (props) => <Icon name="calendar-day" {...props} />;
-    const MessageSquare = (props) => <Icon name="comment-dots" {...props} />;
-    const FileText = (props) => <Icon name="file-lines" {...props} />;
-    const Info = (props) => <Icon name="circle-info" {...props} />;
-    const X = (props) => <Icon name="xmark" {...props} />;
-
-    const generateClasses = () => {
-      const hsGrades = ['三', '二', '一'];
-      const hsNames = ['忠', '孝', '仁'];
-      const jhGrades = ['三', '二', '一'];
-      const jhNames = ['忠', '孝', '仁', '愛', '信', '義', '和', '平'];
-      const classes = [];
-      hsGrades.forEach(g => { hsNames.forEach((n, idx) => { classes.push({ id: `H${g}-${idx}`, group: `高${g}`, name: `高${g}${n}`, status: 'pending', detail: '', absentData: [], isActive: true }); }); });
-      jhGrades.forEach(g => { jhNames.forEach((n, idx) => { classes.push({ id: `J${g}-${idx}`, group: `國${g}`, name: `國${g}${n}`, status: 'pending', detail: '', absentData: [], isActive: true }); }); });
-      return classes;
-    };
-
-    const App = () => {
-      const [isTeacherMode, setIsTeacherMode] = useState(false);
-      const [activeTab, setActiveTab] = useState('dashboard');
-      const boardRef = useRef(null); 
-      
-      const [isReady, setIsReady] = useState(false);
-      const [user, setUser] = useState(null);
-      const [notification, setNotification] = useState('');
-      const [isExporting, setIsExporting] = useState(false);
-      const [exportTimeStr, setExportTimeStr] = useState(''); 
-      const [previewImage, setPreviewImage] = useState(null); 
-
-      const [records, setRecords] = useState(generateClasses());
-      const [examConfig, setExamConfig] = useState({ title: '114-2 第1次定期評量', subtitle: '第一天' });
-      const [collectPaperGrades, setCollectPaperGrades] = useState({ '高三': false, '高二': false, '高一': false, '國三': false, '國二': false, '國一': false });
-      const [generatedLink, setGeneratedLink] = useState('');
-
-      const [selectedClass, setSelectedClass] = useState('H3-0'); 
-      const [attendanceMode, setAttendanceMode] = useState('all_present'); 
-      const [absentList, setAbsentList] = useState([{ seatNumber: '', name: '', leaveType: '事假' }]);
-
-      useEffect(() => {
-        const initAuth = async () => {
-          try { await signInAnonymously(auth); } catch (e) {
-            console.error("Firebase登入失敗", e);
-            setNotification('連線失敗，請確認 Firebase 設定。');
-          }
-        };
-        initAuth();
-        const unsubscribe = onAuthStateChanged(auth, setUser);
-        return () => unsubscribe();
-      }, []);
-
-      useEffect(() => {
-        if (!user) return;
-        const docRef = doc(db, 'school_data', 'examState');
-        const unsubscribe = onSnapshot(docRef, (docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            if (data.records) setRecords(data.records);
-            if (data.examConfig) setExamConfig(data.examConfig);
-            if (data.collectPaperGrades) setCollectPaperGrades(data.collectPaperGrades);
-            setIsReady(true);
-          } else {
-            setDoc(docRef, {
-              records: generateClasses(),
-              examConfig: { title: '114-2 第1次定期評量', subtitle: '第一天' },
-              collectPaperGrades: { '高三': false, '高二': false, '高一': false, '國三': false, '國二': false, '國一': false }
-            });
-            setIsReady(true);
-          }
-        }, (error) => {
-          console.error("同步錯誤", error);
-          setNotification('資料庫連線錯誤，請確認 Firebase 是否設為「測試模式」');
-        });
-        return () => unsubscribe();
-      }, [user]);
-
-      useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        if (params.has('id')) { setIsTeacherMode(true); setActiveTab('report'); }
-      }, []);
-
-      const syncToCloud = (field, data) => {
-        if (db && user) { setDoc(doc(db, 'school_data', 'examState'), { [field]: data }, { merge: true }); }
-      };
-
-      useEffect(() => {
-        const currentRecord = records.find(r => r.id === selectedClass);
-        if (currentRecord && currentRecord.status !== 'pending') {
-          setAttendanceMode(currentRecord.status);
-          if (currentRecord.status === 'absent' && currentRecord.absentData?.length > 0) {
-            setAbsentList(currentRecord.absentData);
-          } else { setAbsentList([{ seatNumber: '', name: '', leaveType: '事假' }]); }
-        } else {
-          setAttendanceMode('all_present'); setAbsentList([{ seatNumber: '', name: '', leaveType: '事假' }]);
-        }
-      }, [selectedClass, records]);
-
-      const handleAbsentChange = (index, field, value) => {
-        const newList = [...absentList]; newList[index][field] = value; setAbsentList(newList);
-      };
-      const addAbsentRow = () => setAbsentList([...absentList, { seatNumber: '', name: '', leaveType: '事假' }]);
-      const removeAbsentRow = (index) => setAbsentList(absentList.filter((_, i) => i !== index));
-
-      const handleSubmit = (e) => {
-        e.preventDefault();
-        const now = new Date();
-        const timeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-        let validAbsents = [];
-        if (attendanceMode === 'absent') validAbsents = absentList.filter(item => item.seatNumber.toString().trim() !== '');
-
-        const newRecords = records.map(record => {
-          if (record.id === selectedClass) return { ...record, status: attendanceMode, absentData: validAbsents, time: timeString };
-          return record;
-        });
-
-        setRecords(newRecords);
-        syncToCloud('records', newRecords);
-        
-        const className = records.find(r => r.id === selectedClass)?.name;
-        const isUpdate = records.find(r => r.id === selectedClass)?.status !== 'pending';
-        setNotification(isUpdate ? `${className} 資料已更新！` : `${className} 回報成功！`);
-        
-        setTimeout(() => { setNotification(''); if (!isTeacherMode) setActiveTab('dashboard'); }, 1500);
-      };
-
-      const toggleCollectPaperGrade = (grade) => {
-        const newGrades = {...collectPaperGrades, [grade]: !collectPaperGrades[grade]};
-        setCollectPaperGrades(newGrades); syncToCloud('collectPaperGrades', newGrades);
-      };
-
-      const toggleClassActive = (id) => {
-        const newRecords = records.map(r => r.id === id ? { ...r, isActive: !r.isActive } : r);
-        setRecords(newRecords); syncToCloud('records', newRecords);
-      };
-
-      const handleExportImage = () => {
-        if (!window.html2canvas) return;
-        setIsExporting(true); setNotification('正在產生圖片中...');
-        const now = new Date();
-        setExportTimeStr(`${now.getFullYear()}年${now.getMonth()+1}月${now.getDate()}日 ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
-        
-        setTimeout(() => {
-          if (boardRef.current) {
-            window.html2canvas(boardRef.current, { scale: 2, backgroundColor: '#f9fafb', useCORS: true, logging: false }).then(canvas => {
-              setPreviewImage(canvas.toDataURL('image/png')); 
-              setIsExporting(false); setNotification('');
-            }).catch(err => { setIsExporting(false); setNotification('❌ 圖片產生失敗'); });
-          }
-        }, 500); 
-      };
-
-      if (!isReady) {
-        return (
-          <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
-            <i className="fa-solid fa-circle-notch fa-spin text-teal-600 text-4xl mb-4"></i>
-            <div className="text-teal-700 font-bold text-xl">連線至雲端資料庫...</div>
-          </div>
-        );
+  useEffect(() => {
+    const currentRecord = records.find(r => r.id === selectedClass);
+    if (currentRecord && currentRecord.status !== 'pending') {
+      setAttendanceMode(currentRecord.status);
+      if (currentRecord.status === 'absent' && currentRecord.absentData?.length > 0) {
+        setAbsentList(currentRecord.absentData);
+      } else {
+        setAbsentList([{ seatNumber: '', name: '', leaveType: '事假' }]);
       }
+    } else {
+      setAttendanceMode('all_present');
+      setAbsentList([{ seatNumber: '', name: '', leaveType: '事假' }]);
+    }
+  }, [selectedClass, records]);
 
-      const activeRecords = records.filter(r => r.isActive);
-      const summary = {
-        total: activeRecords.length, reported: activeRecords.filter(r => r.status !== 'pending').length,
-        allPresent: activeRecords.filter(r => r.status === 'all_present').length, hasAbsent: activeRecords.filter(r => r.status === 'absent').length,
-        pending: activeRecords.filter(r => r.status === 'pending').length,
-      };
+  const handleAbsentChange = (index, field, value) => {
+    const newList = [...absentList];
+    newList[index][field] = value;
+    setAbsentList(newList);
+  };
+  const addAbsentRow = () => setAbsentList([...absentList, { seatNumber: '', name: '', leaveType: '事假' }]);
+  const removeAbsentRow = (index) => setAbsentList(absentList.filter((_, i) => i !== index));
 
-      const groupedActiveRecords = activeRecords.reduce((acc, curr) => { if (!acc[curr.group]) acc[curr.group] = []; acc[curr.group].push(curr); return acc; }, {});
-      const groupedAllRecords = records.reduce((acc, curr) => { if (!acc[curr.group]) acc[curr.group] = []; acc[curr.group].push(curr); return acc; }, {});
+  const toggleClassActive = (id) => {
+    setRecords(records.map(r => r.id === id ? { ...r, isActive: !r.isActive } : r));
+  };
 
-      return (
-        <div className="min-h-screen bg-gray-50 text-gray-800 pb-10">
-          <nav className="bg-teal-700 text-white p-4 shadow-md sticky top-0 z-10 flex justify-between items-center">
-            <div className="max-w-4xl mx-auto w-full flex justify-between items-center">
-              <div className="flex items-center space-x-3">
-                <ClipboardList size={24} />
-                <div>
-                  <h1 className="text-lg md:text-xl font-bold flex items-center">
-                    {examConfig.title} 
-                    <span className="ml-2 flex items-center text-xs bg-teal-800 px-2 py-0.5 rounded-full text-teal-200"><span className="w-2 h-2 bg-green-400 rounded-full mr-1 animate-pulse"></span>連線正常</span>
-                  </h1>
-                  <p className="text-xs md:text-sm text-teal-200">{examConfig.subtitle} 回報系統</p>
-                </div>
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    const now = new Date();
+    const timeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+
+    let validAbsents = [];
+    if (attendanceMode === 'absent') {
+      validAbsents = absentList.filter(item => item.seatNumber.toString().trim() !== '');
+    }
+
+    const newRecords = records.map(record => {
+      if (record.id === selectedClass) {
+        return {
+          ...record,
+          status: attendanceMode,
+          absentData: validAbsents, 
+          time: timeString
+        };
+      }
+      return record;
+    });
+
+    setRecords(newRecords);
+    
+    const className = records.find(r => r.id === selectedClass)?.name;
+    const isUpdate = records.find(r => r.id === selectedClass)?.status !== 'pending';
+    
+    setNotification(isUpdate ? `${className} 資料已成功更新覆蓋！` : `${className} 回報成功！`);
+    
+    setTimeout(() => {
+      setNotification('');
+      setActiveTab('dashboard');
+    }, 1500);
+  };
+
+  // 實際輸出圖片並彈出預覽視窗的功能
+  const handleExportImage = () => {
+    if (!window.html2canvas) {
+      setNotification('圖片產生套件載入中，請稍後再試...');
+      return;
+    }
+
+    setIsExporting(true);
+    setNotification('正在產生高畫質圖片中...');
+    
+    const now = new Date();
+    const formattedDate = `${now.getFullYear()}年${now.getMonth()+1}月${now.getDate()}日 ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    setExportTimeStr(formattedDate);
+    
+    setTimeout(() => {
+      if (boardRef.current) {
+        window.html2canvas(boardRef.current, {
+          scale: 2, 
+          backgroundColor: '#f9fafb', 
+          useCORS: true,
+          logging: false
+        }).then(canvas => {
+          const image = canvas.toDataURL('image/png');
+          setPreviewImage(image); // 不直接下載，而是存入狀態開啟預覽視窗
+          setIsExporting(false);
+          setNotification('');
+        }).catch(err => {
+          console.error("截圖失敗:", err);
+          setNotification('❌ 圖片產生失敗，請稍後再試。');
+          setIsExporting(false);
+        });
+      }
+    }, 500); 
+  };
+
+  // [新增] 執行資料歸零功能
+  const confirmReset = () => {
+    const resetRecords = records.map(r => ({
+      ...r,
+      status: 'pending',
+      absentData: [],
+      time: '',
+      detail: ''
+    }));
+    setRecords(resetRecords);
+
+    const resetGrades = { '高三': false, '高二': false, '高一': false, '國三': false, '國二': false, '國一': false };
+    setCollectPaperGrades(resetGrades);
+
+    setShowResetConfirm(false);
+    setNotification('✅ 所有資料已成功歸零，準備好迎接新的一天！');
+    setTimeout(() => setNotification(''), 3000);
+  };
+
+  const summary = {
+    total: activeRecords.length,
+    reported: activeRecords.filter(r => r.status !== 'pending').length,
+    allPresent: activeRecords.filter(r => r.status === 'all_present').length,
+    hasAbsent: activeRecords.filter(r => r.status === 'absent').length,
+    pending: activeRecords.filter(r => r.status === 'pending').length,
+  };
+
+  const groupedActiveRecords = activeRecords.reduce((acc, curr) => {
+    if (!acc[curr.group]) acc[curr.group] = [];
+    acc[curr.group].push(curr);
+    return acc;
+  }, {});
+
+  const groupedAllRecords = records.reduce((acc, curr) => {
+    if (!acc[curr.group]) acc[curr.group] = [];
+    acc[curr.group].push(curr);
+    return acc;
+  }, {});
+
+  return (
+    <div className="min-h-screen bg-gray-50 text-gray-800 font-sans pb-10">
+      <nav className="bg-teal-700 text-white p-4 shadow-md sticky top-0 z-10">
+        <div className="max-w-4xl mx-auto flex justify-between items-center">
+          <div className="flex items-center space-x-2">
+            <ClipboardList size={24} />
+            <div>
+              <h1 className="text-lg font-bold">{examConfig.title}</h1>
+              <p className="text-xs text-teal-200">{examConfig.subtitle} 回報系統</p>
+            </div>
+          </div>
+          {isTeacherMode && (
+            <button 
+              onClick={() => {setIsTeacherMode(false); setActiveTab('settings');}} 
+              className="text-xs bg-teal-800 hover:bg-teal-900 px-3 py-1.5 rounded-lg transition-colors border border-teal-500 font-bold flex items-center shadow-inner"
+            >
+              <Eye className="mr-1" size={14} /> 退出模擬
+            </button>
+          )}
+        </div>
+      </nav>
+
+      <div className="max-w-4xl mx-auto mt-4 px-4 relative">
+        {!isTeacherMode && (
+          <div className="flex space-x-1 md:space-x-2 mb-6 bg-white p-1 rounded-lg shadow-sm border border-gray-200">
+            <button 
+              onClick={() => setActiveTab('dashboard')}
+              className={`flex-1 py-3 px-2 md:px-4 rounded-md flex items-center justify-center space-x-1 md:space-x-2 transition-colors text-sm md:text-base ${activeTab === 'dashboard' ? 'bg-teal-50 text-teal-700 font-bold border border-teal-200' : 'text-gray-500 hover:bg-gray-50'}`}
+            >
+              <Users size={18} />
+              <span className="whitespace-nowrap">全校看板</span>
+            </button>
+            <button 
+              onClick={() => setActiveTab('report')}
+              className={`flex-1 py-3 px-2 md:px-4 rounded-md flex items-center justify-center space-x-1 md:space-x-2 transition-colors text-sm md:text-base ${activeTab === 'report' ? 'bg-teal-50 text-teal-700 font-bold border border-teal-200' : 'text-gray-500 hover:bg-gray-50'}`}
+            >
+              <Send size={18} />
+              <span className="whitespace-nowrap">導師回報</span>
+            </button>
+            <button 
+              onClick={() => setActiveTab('settings')}
+              className={`flex-1 py-3 px-2 md:px-4 rounded-md flex items-center justify-center space-x-1 md:space-x-2 transition-colors text-sm md:text-base ${activeTab === 'settings' ? 'bg-teal-50 text-teal-700 font-bold border border-teal-200' : 'text-gray-500 hover:bg-gray-50'}`}
+            >
+              <Settings size={18} />
+              <span className="whitespace-nowrap">行政設定</span>
+            </button>
+          </div>
+        )}
+
+        {notification && (
+          <div className={`border-l-4 p-4 mb-4 rounded shadow-sm flex items-center font-bold animate-in fade-in ${notification.includes('產生圖片') ? 'bg-blue-100 border-blue-500 text-blue-800' : notification.includes('覆蓋') ? 'bg-yellow-100 border-yellow-500 text-yellow-800' : 'bg-green-100 border-green-500 text-green-800'}`}>
+            {notification.includes('產生圖片') ? <Camera className="mr-2 animate-pulse" size={20} /> : <CheckCircle className="mr-2" size={20} />}
+            {notification}
+          </div>
+        )}
+
+        {/* 清除資料確認視窗 (Modal) */}
+        {showResetConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 p-4 animate-in fade-in">
+            <div className="bg-white rounded-xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden z-[60]">
+              <div className="p-4 border-b border-gray-200 bg-red-50">
+                <h3 className="font-bold text-red-800 text-lg flex items-center">
+                  <AlertTriangle className="mr-2" size={20} /> 警告：清除所有資料
+                </h3>
+              </div>
+              <div className="p-6 text-gray-700">
+                <p className="font-bold text-lg mb-2">確定要清除所有的出缺席資料嗎？</p>
+                <p className="text-sm text-gray-500 leading-relaxed">
+                  這將會把全校所有班級恢復為「尚未回報」的狀態，並清空所有的缺考名單。<br/><br/>
+                  ※ 您的班級勾選設定與考試名稱<span className="text-green-600 font-bold">會自動保留</span>。<br/>
+                  <span className="text-red-600 font-bold">此動作無法復原！</span>
+                </p>
+              </div>
+              <div className="p-4 border-t border-gray-200 bg-gray-50 flex justify-end gap-3">
+                <button onClick={() => setShowResetConfirm(false)} className="px-5 py-2 rounded-lg font-bold text-gray-600 bg-gray-200 hover:bg-gray-300 transition-colors">
+                  取消
+                </button>
+                <button onClick={confirmReset} className="px-5 py-2 rounded-lg font-bold text-white bg-red-600 hover:bg-red-700 transition-colors shadow-sm flex items-center">
+                  <Trash2 className="mr-2" size={16}/> 確定清除
+                </button>
               </div>
             </div>
-          </nav>
+          </div>
+        )}
 
-          <div className="max-w-4xl mx-auto mt-4 px-4 relative">
-            {!isTeacherMode && (
-              <div className="flex space-x-1 md:space-x-2 mb-6 bg-white p-1 rounded-lg shadow-sm border border-gray-200">
-                <button onClick={() => setActiveTab('dashboard')} className={`flex-1 py-3 px-2 md:px-4 rounded-md flex items-center justify-center space-x-1 md:space-x-2 transition-colors text-sm md:text-base ${activeTab === 'dashboard' ? 'bg-teal-50 text-teal-700 font-bold border border-teal-200' : 'text-gray-500 hover:bg-gray-50'}`}>
-                  <Users size={18} /><span className="whitespace-nowrap">全校看板</span>
-                </button>
-                <button onClick={() => setActiveTab('report')} className={`flex-1 py-3 px-2 md:px-4 rounded-md flex items-center justify-center space-x-1 md:space-x-2 transition-colors text-sm md:text-base ${activeTab === 'report' ? 'bg-teal-50 text-teal-700 font-bold border border-teal-200' : 'text-gray-500 hover:bg-gray-50'}`}>
-                  <Send size={18} /><span className="whitespace-nowrap">導師回報</span>
-                </button>
-                <button onClick={() => setActiveTab('settings')} className={`flex-1 py-3 px-2 md:px-4 rounded-md flex items-center justify-center space-x-1 md:space-x-2 transition-colors text-sm md:text-base ${activeTab === 'settings' ? 'bg-teal-50 text-teal-700 font-bold border border-teal-200' : 'text-gray-500 hover:bg-gray-50'}`}>
-                  <Settings size={18} /><span className="whitespace-nowrap">行政設定</span>
+        {/* 圖片預覽彈出視窗 (Modal) */}
+        {previewImage && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80 p-4 animate-in fade-in">
+            <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col relative shadow-2xl">
+              
+              <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-xl">
+                <h3 className="font-bold text-gray-800 text-lg flex items-center"><Camera className="mr-2 text-teal-600" size={20}/> 圖片產生完成</h3>
+                <button onClick={() => setPreviewImage(null)} className="text-gray-400 hover:text-red-500 transition-colors p-1 bg-white rounded-full shadow-sm">
+                  <X size={24} />
                 </button>
               </div>
-            )}
 
-            {notification && (
-              <div className={`border-l-4 p-4 mb-4 rounded shadow-sm flex items-center font-bold ${notification.includes('失敗') || notification.includes('錯誤') ? 'bg-red-100 border-red-500 text-red-800' : 'bg-green-100 border-green-500 text-green-800'}`}>
-                {notification.includes('產生圖片') ? <Camera className="mr-2" size={20} /> : <CheckCircle className="mr-2" size={20} />}
-                {notification}
+              <div className="p-4 bg-orange-50 border-b border-orange-100 text-center">
+                <p className="text-sm font-bold text-orange-800 flex justify-center items-center">
+                  <span className="animate-bounce mr-1">👇</span> 手機版請對著下方圖片【長按】，選擇儲存或分享 <span className="animate-bounce ml-1">👇</span>
+                </p>
               </div>
-            )}
-
-            {previewImage && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80 p-4">
-                <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col relative shadow-2xl">
-                  <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50 rounded-t-xl">
-                    <h3 className="font-bold text-gray-800 text-lg flex items-center"><Camera className="mr-2 text-teal-600" size={20}/> 圖片產生完成</h3>
-                    <button onClick={() => setPreviewImage(null)} className="text-gray-400 hover:text-red-500 transition-colors p-1 bg-white rounded-full shadow-sm"><X size={24} /></button>
-                  </div>
-                  <div className="p-4 bg-orange-50 border-b border-orange-100 text-center">
-                    <p className="text-sm font-bold text-orange-800 flex justify-center items-center">
-                      <span className="mr-1">👇</span> 手機版請對著下方圖片【長按】，選擇儲存或分享 <span className="ml-1">👇</span>
-                    </p>
-                  </div>
-                  <div className="overflow-y-auto flex-1 p-4 bg-gray-200 flex justify-center items-start">
-                    <img src={previewImage} alt="出缺席總表預覽" className="max-w-full h-auto shadow-md border border-gray-300" />
-                  </div>
-                  <div className="p-4 border-t border-gray-200 bg-white rounded-b-xl flex justify-center gap-4">
-                    <button onClick={() => {
-                        const link = document.createElement('a'); link.href = previewImage;
-                        const now = new Date(); const timeStr = `${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}`;
-                        link.download = `出缺席總表_${timeStr}.png`; link.click();
-                      }} className="bg-teal-600 hover:bg-teal-700 text-white px-6 py-3 rounded-lg font-bold transition-colors flex items-center shadow-md">
-                      💻 電腦版下載圖片
-                    </button>
-                    <button onClick={() => setPreviewImage(null)} className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-6 py-3 rounded-lg font-bold transition-colors">
-                      關閉
-                    </button>
-                  </div>
-                </div>
+              
+              <div className="overflow-y-auto flex-1 p-4 bg-gray-200 flex justify-center items-start">
+                <img src={previewImage} alt="出缺席總表預覽" className="max-w-full h-auto shadow-md border border-gray-300" />
               </div>
-            )}
+              
+              <div className="p-4 border-t border-gray-200 bg-white rounded-b-xl flex justify-center gap-4">
+                <button 
+                  onClick={() => {
+                    const link = document.createElement('a');
+                    link.href = previewImage;
+                    const now = new Date();
+                    const timeStr = `${now.getHours().toString().padStart(2, '0')}${now.getMinutes().toString().padStart(2, '0')}`;
+                    link.download = `出缺席總表_${timeStr}.png`;
+                    link.click();
+                  }} 
+                  className="bg-teal-600 hover:bg-teal-700 text-white px-6 py-3 rounded-lg font-bold transition-colors flex items-center shadow-md"
+                >
+                  💻 電腦版下載圖片
+                </button>
+                <button 
+                  onClick={() => setPreviewImage(null)} 
+                  className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-6 py-3 rounded-lg font-bold transition-colors"
+                >
+                  關閉
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
-            {activeTab === 'report' && (
-               <div className="bg-white rounded-xl shadow-md p-6 max-w-md mx-auto border-t-4 border-teal-600">
-               <div className="mb-4">
-                 <h2 className="text-xl font-bold text-gray-800 flex items-center"><Send className="mr-2" size={20}/> 出缺席回報</h2>
-                 <p className="text-gray-500 text-sm mt-1">如需修改紀錄，重新選擇班級並送出即可覆蓋前次資料。</p>
-               </div>
+        {/* 導師回報區 */}
+        {activeTab === 'report' && (
+           <div className="bg-white rounded-xl shadow-md p-6 max-w-md mx-auto border-t-4 border-teal-600">
+           <div className="mb-4">
+             <h2 className="text-xl font-bold text-gray-800 flex items-center"><Send className="mr-2" size={20}/> 出缺席回報</h2>
+             <p className="text-gray-500 text-sm mt-1">如需修改紀錄，重新選擇班級並送出即可覆蓋前次資料。</p>
+           </div>
 
-               <form onSubmit={handleSubmit} className="space-y-6">
-                 <div>
-                   <label className="block text-sm font-bold text-gray-700 mb-2">1. 您的班級</label>
-                   <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full border-2 border-gray-300 rounded-lg p-3 bg-white focus:ring-0 focus:border-teal-500 outline-none text-lg font-medium">
-                     {Object.entries(groupedActiveRecords).map(([groupName, classes]) => (
-                       <optgroup key={groupName} label={`${groupName}年級`}>
-                         {classes.map(c => (
-                           <option key={c.id} value={c.id}>{c.name} {c.status !== 'pending' ? '(已填報)' : ''}</option>
-                         ))}
-                       </optgroup>
+           <form onSubmit={handleSubmit} className="space-y-6">
+             <div>
+               <label className="block text-sm font-bold text-gray-700 mb-2">1. 您的班級</label>
+               <select 
+                 value={selectedClass} 
+                 onChange={(e) => setSelectedClass(e.target.value)}
+                 className="w-full border-2 border-gray-300 rounded-lg p-3 bg-white focus:ring-0 focus:border-teal-500 outline-none text-lg font-medium"
+               >
+                 {Object.entries(groupedActiveRecords).map(([groupName, classes]) => (
+                   <optgroup key={groupName} label={`${groupName}年級`}>
+                     {classes.map(c => (
+                       <option key={c.id} value={c.id}>
+                         {c.name} {c.status !== 'pending' ? '(已填報)' : ''}
+                       </option>
                      ))}
-                   </select>
+                   </optgroup>
+                 ))}
+               </select>
+               
+               {records.find(r => r.id === selectedClass)?.status !== 'pending' && (
+                 <div className="mt-2 text-sm text-yellow-700 bg-yellow-50 p-2 rounded-md border border-yellow-200 flex items-center">
+                    <Clock size={14} className="mr-1"/> 系統已自動帶入您上次送出的紀錄
                  </div>
+               )}
+             </div>
 
-                 <div>
-                   <label className="block text-sm font-bold text-gray-700 mb-2">2. 今日出席狀況</label>
-                   <div className="grid grid-cols-2 gap-3">
-                     <button type="button" onClick={() => setAttendanceMode('all_present')} className={`p-4 rounded-lg border-2 flex flex-col items-center justify-center transition-all ${attendanceMode === 'all_present' ? 'border-green-500 bg-green-50 text-green-700 shadow-sm' : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'}`}>
-                       <CheckCircle size={32} className={`mb-2 ${attendanceMode === 'all_present' ? 'text-green-500' : 'text-gray-400'}`} />
-                       <span className="font-bold">全班實到</span>
-                     </button>
-                     <button type="button" onClick={() => setAttendanceMode('absent')} className={`p-4 rounded-lg border-2 flex flex-col items-center justify-center transition-all ${attendanceMode === 'absent' ? 'border-red-500 bg-red-50 text-red-700 shadow-sm' : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'}`}>
-                       <AlertTriangle size={32} className={`mb-2 ${attendanceMode === 'absent' ? 'text-red-500' : 'text-gray-400'}`} />
-                       <span className="font-bold">有人請假/缺考</span>
-                     </button>
-                   </div>
-                 </div>
+             <div>
+               <label className="block text-sm font-bold text-gray-700 mb-2">2. 今日出席狀況</label>
+               <div className="grid grid-cols-2 gap-3">
+                 <button
+                   type="button"
+                   onClick={() => setAttendanceMode('all_present')}
+                   className={`p-4 rounded-lg border-2 flex flex-col items-center justify-center transition-all ${
+                     attendanceMode === 'all_present' 
+                     ? 'border-green-500 bg-green-50 text-green-700 shadow-sm' 
+                     : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'
+                   }`}
+                 >
+                   <CheckCircle size={32} className={`mb-2 ${attendanceMode === 'all_present' ? 'text-green-500' : 'text-gray-400'}`} />
+                   <span className="font-bold">全班實到</span>
+                 </button>
+                 
+                 <button
+                   type="button"
+                   onClick={() => setAttendanceMode('absent')}
+                   className={`p-4 rounded-lg border-2 flex flex-col items-center justify-center transition-all ${
+                     attendanceMode === 'absent' 
+                     ? 'border-red-500 bg-red-50 text-red-700 shadow-sm' 
+                     : 'border-gray-200 bg-white text-gray-500 hover:bg-gray-50'
+                   }`}
+                 >
+                   <AlertTriangle size={32} className={`mb-2 ${attendanceMode === 'absent' ? 'text-red-500' : 'text-gray-400'}`} />
+                   <span className="font-bold">有人請假/缺考</span>
+                 </button>
+               </div>
+             </div>
 
-                 {attendanceMode === 'absent' && (
-                   <div className="space-y-3 bg-red-50 p-3 md:p-5 rounded-xl border border-red-100 shadow-inner">
-                     <label className="block text-sm font-bold text-red-700 mb-2">3. 請填寫缺席名單</label>
-                     {absentList.map((item, index) => (
-                       <div key={index} className="bg-white p-3 md:p-4 rounded-lg border-2 border-red-200 relative mb-3 shadow-sm transition-all focus-within:border-red-400">
-                         <div className="flex flex-col gap-3">
-                           <div className="flex flex-row gap-2">
-                             <div className="w-20 flex-shrink-0 flex flex-col">
-                               <label className="text-xs text-red-600 font-bold mb-1">座號 <span className="text-red-500">*</span></label>
-                               <input type="number" min="1" max="99" value={item.seatNumber} onChange={(e) => handleAbsentChange(index, 'seatNumber', e.target.value)} className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-lg outline-none text-center font-bold text-gray-700 focus:ring-2 focus:ring-red-200 focus:border-red-400" required />
-                             </div>
-                             <div className="flex-1 flex flex-col">
-                               <label className="text-xs text-red-600 font-bold mb-1">姓名 <span className="text-red-500">*</span></label>
-                               <input type="text" value={item.name || ''} onChange={(e) => handleAbsentChange(index, 'name', e.target.value)} className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-lg outline-none font-bold text-gray-700 placeholder-gray-400 focus:ring-2 focus:ring-red-200 focus:border-red-400" required />
-                             </div>
-                           </div>
-                           <div className="flex flex-row gap-2 items-end">
-                             <div className="flex-1 flex flex-col">
-                               <label className="text-xs text-red-600 font-bold mb-1">假別</label>
-                               <select value={item.leaveType} onChange={(e) => handleAbsentChange(index, 'leaveType', e.target.value)} className="w-full p-2.5 bg-white border border-gray-300 rounded-lg outline-none font-bold text-gray-700 text-center focus:ring-2 focus:ring-red-200 focus:border-red-400">
-                                 <option value="事假">事假</option>
-                                 <option value="病假">病假</option>
-                                 <option value="公假">公假</option>
-                                 <option value="喪假">喪假</option>
-                                 <option value="缺考">缺考</option>
-                                 <option value="出國">出國</option>
-                               </select>
-                             </div>
-                             {absentList.length > 1 ? (
-                               <button type="button" onClick={() => removeAbsentRow(index)} className="p-2.5 text-red-500 hover:text-red-700 hover:bg-red-50 bg-white border border-red-200 rounded-lg transition-colors flex-shrink-0 flex items-center justify-center h-[46px]"><Trash2 size={20} /></button>
-                             ) : (<div className="w-[46px] flex-shrink-0"></div>)}
-                           </div>
+             {attendanceMode === 'absent' && (
+               <div className="animate-in fade-in slide-in-from-top-2 space-y-3 bg-red-50 p-3 md:p-5 rounded-xl border border-red-100 shadow-inner">
+                 <label className="block text-sm font-bold text-red-700 mb-2">3. 請填寫缺席名單</label>
+                 {absentList.map((item, index) => (
+                   <div key={index} className="bg-white p-3 md:p-4 rounded-lg border-2 border-red-200 relative mb-3 shadow-sm transition-all focus-within:border-red-400">
+                     <div className="flex flex-col gap-3">
+                       <div className="flex flex-row gap-2">
+                         <div className="w-20 flex-shrink-0 flex flex-col">
+                           <label className="text-xs text-red-600 font-bold mb-1">座號 <span className="text-red-500">*</span></label>
+                           <input 
+                             type="number" 
+                             min="1" max="99" 
+                             value={item.seatNumber} 
+                             onChange={(e) => handleAbsentChange(index, 'seatNumber', e.target.value)} 
+                             className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-lg outline-none text-center font-bold text-gray-700 focus:ring-2 focus:ring-red-200 focus:border-red-400" 
+                             placeholder="例: 5" required 
+                           />
+                         </div>
+                         <div className="flex-1 flex flex-col">
+                           <label className="text-xs text-red-600 font-bold mb-1">姓名 <span className="text-red-500">*</span></label>
+                           <input 
+                             type="text" 
+                             value={item.name || ''} 
+                             onChange={(e) => handleAbsentChange(index, 'name', e.target.value)} 
+                             className="w-full p-2.5 bg-gray-50 border border-gray-300 rounded-lg outline-none font-bold text-gray-700 placeholder-gray-400 focus:ring-2 focus:ring-red-200 focus:border-red-400" 
+                             placeholder="請輸入姓名" 
+                             required 
+                           />
                          </div>
                        </div>
-                     ))}
-                     <button type="button" onClick={addAbsentRow} className="w-full mt-3 py-3 border-2 border-dashed border-red-300 text-red-600 rounded-lg font-bold flex items-center justify-center hover:bg-red-100 transition-colors">
-                       <Plus size={20} className="mr-1" /> 再加一人
-                     </button>
+                       <div className="flex flex-row gap-2 items-end">
+                         <div className="flex-1 flex flex-col">
+                           <label className="text-xs text-red-600 font-bold mb-1">假別</label>
+                           <select 
+                             value={item.leaveType} 
+                             onChange={(e) => handleAbsentChange(index, 'leaveType', e.target.value)} 
+                             className="w-full p-2.5 bg-white border border-gray-300 rounded-lg outline-none font-bold text-gray-700 text-center focus:ring-2 focus:ring-red-200 focus:border-red-400"
+                           >
+                             <option value="事假">事假</option>
+                             <option value="病假">病假</option>
+                             <option value="公假">公假</option>
+                             <option value="喪假">喪假</option>
+                             <option value="缺考">缺考</option>
+                             <option value="出國">出國</option>
+                           </select>
+                         </div>
+                         {absentList.length > 1 ? (
+                           <button type="button" onClick={() => removeAbsentRow(index)} className="p-2.5 text-red-500 hover:text-red-700 hover:bg-red-50 bg-white border border-red-200 rounded-lg transition-colors flex-shrink-0 flex items-center justify-center h-[46px]">
+                             <Trash2 size={20} />
+                           </button>
+                         ) : (<div className="w-[46px] flex-shrink-0"></div>)}
+                       </div>
+                     </div>
                    </div>
-                 )}
-                 <button type="submit" className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-4 px-4 rounded-lg shadow-md transition-colors flex justify-center items-center text-lg mt-4">
-                   <Send className="mr-2" size={20} /> 確認送出回報
+                 ))}
+                 <button type="button" onClick={addAbsentRow} className="w-full mt-3 py-3 border-2 border-dashed border-red-300 text-red-600 rounded-lg font-bold flex items-center justify-center hover:bg-red-100 transition-colors">
+                   <Plus size={20} className="mr-1" /> 再加一人
                  </button>
-               </form>
-             </div>
-            )}
+               </div>
+             )}
+             <button type="submit" className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-4 px-4 rounded-lg shadow-md transition-colors flex justify-center items-center text-lg mt-4">
+               <Send className="mr-2" size={20} /> 確認送出回報
+             </button>
+           </form>
+         </div>
+        )}
 
-            {activeTab === 'dashboard' && (
-              <div className="space-y-4">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-2 gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-200">
-                  <div className="flex-1">
-                    <h3 className="text-sm font-bold text-orange-800 mb-2 flex items-center"><FileText size={16} className="mr-1.5" /> 匯出前設定：點選今日需收回考卷的年段</h3>
-                    <div className="flex flex-wrap gap-2">
-                      {Object.keys(collectPaperGrades).map(grade => (
-                        <label key={grade} className={`flex items-center space-x-1.5 px-4 py-2 rounded-lg border-2 cursor-pointer transition-all text-sm md:text-base ${collectPaperGrades[grade] ? 'bg-orange-100 border-orange-500 text-orange-900 shadow-sm font-bold' : 'bg-white border-gray-200 text-gray-500 hover:bg-orange-50 hover:border-orange-200'}`}>
-                          <input type="checkbox" checked={collectPaperGrades[grade]} onChange={() => toggleCollectPaperGrade(grade)} className="hidden" />
-                          <span>{grade}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="flex-shrink-0 w-full md:w-auto">
-                    <button onClick={handleExportImage} disabled={isExporting} className="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-md flex items-center justify-center transition-colors disabled:bg-gray-400 text-sm md:text-base">
-                      <Camera size={20} className="mr-2" /> {isExporting ? '產生中...' : '匯出並預覽圖片'}
-                    </button>
-                  </div>
-                </div>
-
-                <div ref={boardRef} className="space-y-6 bg-gray-50 p-2 md:p-6 -mx-2 md:-mx-6 rounded-xl relative">
-                  {isExporting && (
-                    <div className="text-center pb-4 border-b-4 border-teal-600 mb-4 bg-white p-4 rounded-xl shadow-sm">
-                      <div className="flex items-center justify-center mb-3 flex-wrap">
-                        <h2 className="text-3xl md:text-4xl font-black text-teal-800 tracking-wide mr-3 leading-tight">{examConfig.title}</h2>
-                        {examConfig.subtitle && <span className="bg-gray-100 text-gray-600 px-3 py-1.5 rounded-md text-2xl md:text-3xl font-bold mr-3 leading-tight">{examConfig.subtitle}</span>}
-                        <h2 className="text-3xl md:text-4xl font-black text-teal-800 tracking-wide leading-tight">出缺席總表</h2>
-                      </div>
-                      <div className="inline-block bg-teal-700 text-white px-4 py-1.5 rounded-full text-base md:text-lg font-bold shadow-sm mt-1">
-                        <CalendarClock className="inline-block align-text-bottom mr-1.5 mb-[2px]" size={18} />
-                        <span className="inline-block align-middle leading-none">製表時間：{exportTimeStr}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
-                    <div className="flex justify-between items-center mb-4">
-                      <div>
-                        <h3 className="text-gray-500 text-sm md:text-base font-bold mb-1">全校回報進度</h3>
-                        <p className="text-3xl md:text-4xl font-black text-gray-800">{summary.reported} <span className="text-xl md:text-2xl text-gray-400 font-normal">/ {summary.total} 班</span></p>
-                      </div>
-                      <div className="flex flex-col items-end">
-                        <span className="inline-block px-4 py-1.5 bg-red-100 text-red-700 rounded-full text-sm font-bold mb-2">缺考班級: {summary.hasAbsent}</span>
-                        <span className="inline-block px-4 py-1.5 bg-gray-100 text-gray-600 rounded-full text-sm font-bold">未回報: {summary.pending}</span>
-                      </div>
-                    </div>
-                    <div className="w-full bg-gray-200 rounded-full h-3 mt-2 overflow-hidden flex shadow-inner">
-                      <div className="bg-green-500 h-3 transition-all duration-500" style={{ width: `${(summary.allPresent / summary.total) * 100}%` }}></div>
-                      <div className="bg-red-500 h-3 transition-all duration-500" style={{ width: `${(summary.hasAbsent / summary.total) * 100}%` }}></div>
-                    </div>
-                  </div>
-
-                  {!isExporting && (
-                    <div className="bg-blue-50 p-4 md:p-5 rounded-xl shadow-sm border border-blue-200">
-                      <h3 className="font-bold text-blue-800 mb-3 flex items-center text-sm md:text-base">
-                        <Info size={18} className="mr-1.5" /> 行政追蹤專區 (此區塊不會出現在輸出的圖片)
-                      </h3>
-                      <div className="flex flex-col md:flex-row gap-4">
-                        <div className="flex-1 bg-white p-3 md:p-4 rounded-lg border border-blue-100">
-                          <h4 className="text-sm font-bold text-gray-500 mb-3 border-b pb-2">尚未回報班級 ({summary.pending})</h4>
-                          <div className="flex flex-wrap gap-2">
-                            {activeRecords.filter(r => r.status === 'pending').map(r => (
-                              <span key={`tracking-${r.id}`} className="bg-gray-100 text-gray-600 px-2.5 py-1 rounded-md text-sm font-medium">{r.name}</span>
-                            ))}
-                            {summary.pending === 0 && <span className="text-sm text-green-600 font-bold">全校皆已回報！</span>}
-                          </div>
-                        </div>
-                        <div className="flex-1 bg-white p-3 md:p-4 rounded-lg border border-blue-100">
-                          <h4 className="text-sm font-bold text-red-500 mb-3 border-b pb-2">有缺考學生的班級 ({summary.hasAbsent})</h4>
-                          <div className="flex flex-wrap gap-2">
-                            {activeRecords.filter(r => r.status === 'absent').map(r => (
-                              <span key={`tracking-absent-${r.id}`} className="bg-red-50 text-red-600 border border-red-100 px-2.5 py-1 rounded-md text-sm font-bold">{r.name}</span>
-                            ))}
-                            {summary.hasAbsent === 0 && <span className="text-sm text-gray-400">目前無缺考班級</span>}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {Object.values(collectPaperGrades).some(v => v) && (
-                    <div className="bg-orange-50 rounded-xl shadow-sm border border-orange-200 overflow-hidden break-inside-avoid">
-                      <div className="border-b-2 border-orange-200 bg-orange-50">
-                        <div className="inline-block bg-orange-100 px-5 py-2.5 rounded-br-2xl border-r border-b border-orange-200">
-                          <FileText className="inline-block mr-1.5 align-middle text-orange-800 mb-[2px]" size={20} />
-                          <span className="inline-block align-middle font-bold text-orange-800 text-lg md:text-xl leading-normal">今日需收回考卷年段</span>
-                        </div>
-                      </div>
-                      <div className="p-4">
-                        <div className="flex flex-wrap gap-2">
-                          {Object.entries(collectPaperGrades).filter(([_, isChecked]) => isChecked).map(([grade]) => (
-                              <span key={grade} className="inline-block bg-orange-600 text-white px-5 py-2 rounded-lg text-lg md:text-xl font-bold shadow-sm mr-2 mb-1">{grade}年級</span>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="space-y-6">
-                    {Object.entries(groupedActiveRecords).map(([groupName, classes]) => (
-                      <div key={groupName} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden break-inside-avoid">
-                        <div className="border-b-2 border-teal-600 bg-teal-50">
-                          <div className="inline-block bg-teal-700 px-6 py-2.5 rounded-br-2xl shadow-sm">
-                            <span className="inline-block font-bold text-white tracking-wider text-xl md:text-2xl align-middle leading-normal">{groupName}年級</span>
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0">
-                          {classes.map(record => (
-                            <div key={record.id} className="p-4 md:p-5 border-b md:border-r border-gray-200 flex flex-col justify-start">
-                              <div className="flex items-center justify-between w-full mb-3">
-                                <span className="font-black text-gray-800 text-xl md:text-2xl">{record.name.replace(groupName, '')}班</span>
-                                {record.time && <span className="text-sm text-gray-500 font-medium bg-gray-100 px-2.5 py-1 rounded-full"><Clock size={14} className="inline mr-1 mb-0.5"/>{record.time}</span>}
-                              </div>
-                              
-                              {record.status === 'pending' && <span className="text-gray-400 text-sm md:text-base font-bold flex items-center mt-1"><span className="w-2.5 h-2.5 bg-gray-300 rounded-full mr-2"></span> 尚未回報</span>}
-                              {record.status === 'all_present' && <span className="text-green-600 font-bold text-sm md:text-base flex items-center mt-1"><CheckCircle size={18} className="mr-1.5"/> 全班實到</span>}
-                              {record.status === 'absent' && (
-                                <div className="mt-2 w-full">
-                                  <span className="text-red-600 font-bold text-sm md:text-base flex items-center mb-2"><XCircle size={18} className="mr-1.5"/> 缺席名單：</span>
-                                  <div className="flex flex-wrap">
-                                    {record.absentData.map((ab, idx) => (
-                                      <span key={idx} className="inline-block bg-red-50 text-red-700 border border-red-200 px-2.5 py-1.5 rounded-md text-xs md:text-sm font-bold whitespace-nowrap mr-2 mb-2">
-                                        {ab.seatNumber}號 {ab.name} ({ab.leaveType})
-                                      </span>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+        {/* 全校即時看板 */}
+        {activeTab === 'dashboard' && (
+          <div className="space-y-4">
+            
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-2 gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+              <div className="flex-1">
+                <h3 className="text-sm font-bold text-orange-800 mb-2 flex items-center">
+                  <FileText size={16} className="mr-1.5" /> 匯出前設定：點選今日需收回考卷的年段
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  {Object.keys(collectPaperGrades).map(grade => (
+                    <label key={grade} className={`flex items-center space-x-1.5 px-4 py-2 rounded-lg border-2 cursor-pointer transition-all text-sm md:text-base ${collectPaperGrades[grade] ? 'bg-orange-100 border-orange-500 text-orange-900 shadow-sm font-bold' : 'bg-white border-gray-200 text-gray-500 hover:bg-orange-50 hover:border-orange-200'}`}>
+                      <input 
+                        type="checkbox" 
+                        checked={collectPaperGrades[grade]} 
+                        onChange={() => setCollectPaperGrades({...collectPaperGrades, [grade]: !collectPaperGrades[grade]})} 
+                        className="hidden" 
+                      />
+                      <span>{grade}</span>
+                    </label>
+                  ))}
                 </div>
               </div>
-            )}
 
-            {activeTab === 'settings' && (
-              <div className="bg-white rounded-xl shadow-md p-6 max-w-2xl mx-auto border-t-4 border-gray-700 mb-10">
-                <div className="mb-6 flex items-center text-gray-800">
-                  <Settings className="mr-2" size={24} />
-                  <h2 className="text-xl font-bold">行政設定與產出網址</h2>
-                </div>
-                
-                <div className="space-y-6">
-                  <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                    <h3 className="font-bold text-gray-700 text-sm border-b pb-2 mb-4">1. 設定今日考試資訊</h3>
-                    <div className="flex flex-col md:flex-row gap-4">
-                      <div className="flex-1">
-                        <label className="block text-sm font-bold text-gray-600 mb-1">考試名稱</label>
-                        <input type="text" value={examConfig.title} onChange={(e) => setExamConfig({...examConfig, title: e.target.value})} onBlur={() => syncToCloud('examConfig', examConfig)} className="w-full p-2.5 bg-white border border-gray-300 rounded-lg outline-none font-bold text-gray-800 focus:border-teal-500" />
-                      </div>
-                      <div className="flex-1">
-                        <label className="block text-sm font-bold text-gray-600 mb-1">日期 / 節次 (選填)</label>
-                        <input type="text" value={examConfig.subtitle} onChange={(e) => setExamConfig({...examConfig, subtitle: e.target.value})} onBlur={() => syncToCloud('examConfig', examConfig)} className="w-full p-2.5 bg-white border border-gray-300 rounded-lg outline-none font-bold text-gray-800 focus:border-teal-500" placeholder="例如：第一天" />
-                      </div>
-                    </div>
-                  </div>
+              <div className="flex-shrink-0 w-full md:w-auto">
+                <button 
+                  onClick={handleExportImage}
+                  disabled={isExporting}
+                  className="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-md flex items-center justify-center transition-colors disabled:bg-gray-400 text-sm md:text-base animate-pulse"
+                >
+                  <Camera size={20} className="mr-2" />
+                  {isExporting ? '產生中...' : '匯出並預覽圖片'}
+                </button>
+              </div>
+            </div>
 
-                  <div className="bg-white p-4 rounded-lg border border-gray-200">
-                    <h3 className="font-bold text-gray-700 text-sm border-b pb-2 mb-4 flex justify-between items-center">
-                      <span>2. 設定應填報班級 (請打勾，取消勾選則不列入看板計算)</span>
-                    </h3>
-                    <div className="space-y-4">
-                      {Object.entries(groupedAllRecords).map(([groupName, classes]) => (
-                        <div key={groupName} className="bg-gray-50 p-4 rounded-xl border border-gray-200">
-                          <div className="font-black text-teal-800 mb-3 text-lg border-b border-gray-200 pb-2">{groupName}年級</div>
-                          <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                            {classes.map(c => (
-                              <label key={c.id} className={`flex items-center space-x-2 px-3 py-2.5 rounded-lg border-2 cursor-pointer transition-all ${c.isActive ? 'bg-teal-50 border-teal-500 text-teal-900 shadow-sm' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300 hover:bg-gray-50'}`}>
-                                <input type="checkbox" checked={c.isActive} onChange={() => toggleClassActive(c.id)} className="w-5 h-5 text-teal-600 bg-white border-gray-300 rounded focus:ring-teal-500 focus:ring-2 cursor-pointer accent-teal-600 flex-shrink-0" />
-                                <span className="text-sm md:text-base font-bold whitespace-nowrap">{c.name.replace(groupName, '')}</span>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="bg-teal-50 p-4 rounded-lg border border-teal-200">
-                    <h3 className="font-bold text-teal-800 text-sm border-b border-teal-200 pb-2 mb-4">3. 產生免登入專屬網址給導師</h3>
-                    
-                    <button onClick={() => {
-                        const fakeId = Math.random().toString(36).substring(2, 8);
-                        const baseUrl = window.location.origin + window.location.pathname;
-                        setGeneratedLink(`${baseUrl}?id=${fakeId}`);
-                        setNotification('✅ 已產生今日專屬網址！');
-                        setTimeout(() => setNotification(''), 3000);
-                      }} className="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2.5 px-5 rounded-lg transition-colors flex items-center shadow-md">
-                      <LinkIcon className="mr-2" size={18} /> 產生發布網址
-                    </button>
-
-                    {generatedLink && (
-                      <div className="animate-in fade-in slide-in-from-top-2 space-y-3 mt-4">
-                        <div className="flex items-center bg-white border-2 border-teal-300 rounded-lg overflow-hidden">
-                          <span className="p-2.5 bg-teal-50 text-teal-700 font-bold text-sm border-r border-teal-300 whitespace-nowrap">網址</span>
-                          <input type="text" readOnly value={generatedLink} className="flex-1 p-2.5 outline-none text-gray-700 font-medium text-sm md:text-base" />
-                          <button onClick={() => {
-                              try {
-                                const textArea = document.createElement("textarea");
-                                textArea.value = generatedLink; textArea.style.position = "fixed"; textArea.style.left = "-9999px"; textArea.style.top = "-9999px";
-                                document.body.appendChild(textArea); textArea.focus(); textArea.select();
-                                document.execCommand('copy'); document.body.removeChild(textArea);
-                                setNotification('✅ 網址已成功複製到剪貼簿！');
-                              } catch (err) { setNotification('❌ 複製失敗，請手動選取複製。'); }
-                              setTimeout(() => setNotification(''), 3000);
-                            }} className="p-2.5 md:px-4 bg-teal-100 text-teal-800 hover:bg-teal-200 font-bold flex items-center transition-colors text-sm md:text-base border-l border-teal-300">
-                            <Copy size={18} className="mr-1"/> 複製
-                          </button>
-                        </div>
-
-                        <div className="p-4 bg-white border border-teal-200 rounded-lg shadow-sm mt-3">
-                          <div className="flex justify-between items-center mb-2">
-                            <p className="text-sm font-bold text-teal-800 flex items-center"><MessageSquare size={16} className="mr-1.5" /> 💡 建議發布至群組的文案：</p>
-                            <button onClick={() => {
-                                const textToCopy = `各位導師好，\n今日為【${examConfig.title}${examConfig.subtitle ? ` - ${examConfig.subtitle}` : ''}】\n請於 8:15 前點擊下方專屬網址回報完畢（免登入即可快速填寫）：\n${generatedLink}\n\n※ 若有個別異動同學請直接與教學組連絡。`;
-                                try {
-                                  const textArea = document.createElement("textarea");
-                                  textArea.value = textToCopy; textArea.style.position = "fixed"; textArea.style.left = "-9999px"; textArea.style.top = "-9999px";
-                                  document.body.appendChild(textArea); textArea.focus(); textArea.select();
-                                  document.execCommand('copy'); document.body.removeChild(textArea);
-                                  setNotification('✅ 群組文案已成功複製到剪貼簿！');
-                                } catch (err) { setNotification('❌ 複製失敗，請手動選取複製。'); }
-                                setTimeout(() => setNotification(''), 3000);
-                              }} className="px-3 py-1.5 bg-teal-600 text-white hover:bg-teal-700 rounded-md text-sm font-bold transition-colors flex items-center shadow-sm">
-                              <Copy size={14} className="mr-1"/> 一鍵複製完整文案
-                            </button>
-                          </div>
-                          <textarea readOnly className="w-full text-sm text-gray-700 bg-gray-50 p-3 rounded-lg outline-none border border-gray-200 resize-none leading-relaxed" rows="5" value={`各位導師好，\n今日為【${examConfig.title}${examConfig.subtitle ? ` - ${examConfig.subtitle}` : ''}】\n請於 8:15 前點擊下方專屬網址回報完畢（免登入即可快速填寫）：\n${generatedLink}\n\n※ 若有個別異動同學請直接與教學組連絡。`} />
-                        </div>
-                      </div>
+            <div ref={boardRef} className="space-y-6 bg-gray-50 p-2 md:p-6 -mx-2 md:-mx-6 rounded-xl relative">
+              
+              {/* 標題區塊 */}
+              {isExporting && (
+                <div className="text-center pb-4 border-b-4 border-teal-600 mb-4 bg-white p-4 rounded-xl shadow-sm">
+                  <div className="flex items-center justify-center mb-3 flex-wrap">
+                    <h2 className="text-3xl md:text-4xl font-black text-teal-800 tracking-wide mr-3 leading-tight">{examConfig.title}</h2>
+                    {examConfig.subtitle && (
+                      <span className="bg-gray-100 text-gray-600 px-3 py-1.5 rounded-md text-2xl md:text-3xl font-bold mr-3 leading-tight">{examConfig.subtitle}</span>
                     )}
+                    <h2 className="text-3xl md:text-4xl font-black text-teal-800 tracking-wide leading-tight">出缺席總表</h2>
+                  </div>
+                  <div className="inline-block bg-teal-700 text-white px-4 py-1.5 rounded-full text-base md:text-lg font-bold shadow-sm mt-1">
+                    <CalendarClock className="inline-block align-text-bottom mr-1.5 mb-[2px]" size={18} />
+                    <span className="inline-block align-middle leading-none">製表時間：{exportTimeStr}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* 統計進度條 */}
+              <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
+                <div className="flex justify-between items-center mb-4">
+                  <div>
+                    <h3 className="text-gray-500 text-sm md:text-base font-bold mb-1">全校回報進度</h3>
+                    <p className="text-3xl md:text-4xl font-black text-gray-800">
+                      {summary.reported} <span className="text-xl md:text-2xl text-gray-400 font-normal">/ {summary.total} 班</span>
+                    </p>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <span className="inline-block px-4 py-1.5 bg-red-100 text-red-700 rounded-full text-sm font-bold mb-2">
+                      缺考班級: {summary.hasAbsent}
+                    </span>
+                    <span className="inline-block px-4 py-1.5 bg-gray-100 text-gray-600 rounded-full text-sm font-bold">
+                      未回報: {summary.pending}
+                    </span>
+                  </div>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-3 mt-2 overflow-hidden flex shadow-inner">
+                  <div className="bg-green-500 h-3 transition-all duration-500" style={{ width: `${(summary.allPresent / summary.total) * 100}%` }}></div>
+                  <div className="bg-red-500 h-3 transition-all duration-500" style={{ width: `${(summary.hasAbsent / summary.total) * 100}%` }}></div>
+                </div>
+              </div>
+
+              {/* 行政追蹤專區 (不會出現在匯出圖片中) */}
+              {!isExporting && (
+                <div className="bg-blue-50 p-4 md:p-5 rounded-xl shadow-sm border border-blue-200">
+                  <h3 className="font-bold text-blue-800 mb-3 flex items-center text-sm md:text-base">
+                    <Info size={18} className="mr-1.5" /> 行政追蹤專區 (此區塊不會出現在輸出的圖片中)
+                  </h3>
+                  <div className="flex flex-col md:flex-row gap-4">
+                    <div className="flex-1 bg-white p-3 md:p-4 rounded-lg border border-blue-100">
+                      <h4 className="text-sm font-bold text-gray-500 mb-3 border-b pb-2">尚未回報班級 ({summary.pending})</h4>
+                      <div className="flex flex-wrap gap-2">
+                        {activeRecords.filter(r => r.status === 'pending').map(r => (
+                          <span key={`tracking-${r.id}`} className="bg-gray-100 text-gray-600 px-2.5 py-1 rounded-md text-sm font-medium">
+                            {r.name}
+                          </span>
+                        ))}
+                        {summary.pending === 0 && <span className="text-sm text-green-600 font-bold">全校皆已回報！</span>}
+                      </div>
+                    </div>
+                    <div className="flex-1 bg-white p-3 md:p-4 rounded-lg border border-blue-100">
+                      <h4 className="text-sm font-bold text-red-500 mb-3 border-b pb-2">有缺考學生的班級 ({summary.hasAbsent})</h4>
+                      <div className="flex flex-wrap gap-2">
+                        {activeRecords.filter(r => r.status === 'absent').map(r => (
+                          <span key={`tracking-absent-${r.id}`} className="bg-red-50 text-red-600 border border-red-100 px-2.5 py-1 rounded-md text-sm font-bold">
+                            {r.name}
+                          </span>
+                        ))}
+                        {summary.hasAbsent === 0 && <span className="text-sm text-gray-400">目前無缺考班級</span>}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 需收回考卷年段的橘色提示區塊 */}
+              {Object.values(collectPaperGrades).some(v => v) && (
+                <div className="bg-orange-50 rounded-xl shadow-sm border border-orange-200 overflow-hidden break-inside-avoid">
+                  <div className="border-b-2 border-orange-200 bg-orange-50">
+                    <div className="inline-block bg-orange-100 px-5 py-2.5 rounded-br-2xl border-r border-b border-orange-200">
+                      <FileText className="inline-block mr-1.5 align-middle text-orange-800 mb-[2px]" size={20} />
+                      <span className="inline-block align-middle font-bold text-orange-800 text-lg md:text-xl leading-normal">今日需收回考卷年段</span>
+                    </div>
+                  </div>
+                  <div className="p-4">
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(collectPaperGrades)
+                        .filter(([_, isChecked]) => isChecked)
+                        .map(([grade]) => (
+                          <span key={grade} className="inline-block bg-orange-600 text-white px-5 py-2 rounded-lg text-lg md:text-xl font-bold shadow-sm mr-2 mb-1">
+                            {grade}年級
+                          </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 各年級詳細看板 */}
+              <div className="space-y-6">
+                {Object.entries(groupedActiveRecords).map(([groupName, classes]) => (
+                  <div key={groupName} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden break-inside-avoid">
+                    <div className="border-b-2 border-teal-600 bg-teal-50">
+                      <div className="inline-block bg-teal-700 px-6 py-2.5 rounded-br-2xl shadow-sm">
+                        <span className="inline-block font-bold text-white tracking-wider text-xl md:text-2xl align-middle leading-normal">{groupName}年級</span>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0">
+                      {classes.map(record => (
+                        <div key={record.id} className="p-4 md:p-5 border-b md:border-r border-gray-200 flex flex-col justify-start">
+                          <div className="flex items-center justify-between w-full mb-3">
+                            <span className="font-black text-gray-800 text-xl md:text-2xl">{record.name.replace(groupName, '')}班</span>
+                            {record.time && <span className="text-sm text-gray-500 font-medium bg-gray-100 px-2.5 py-1 rounded-full"><Clock size={14} className="inline mr-1 mb-0.5"/>{record.time}</span>}
+                          </div>
+                          
+                          {record.status === 'pending' && (
+                            <span className="text-gray-400 text-sm md:text-base font-bold flex items-center mt-1"><span className="w-2.5 h-2.5 bg-gray-300 rounded-full mr-2"></span> 尚未回報</span>
+                          )}
+                          {record.status === 'all_present' && (
+                            <span className="text-green-600 font-bold text-sm md:text-base flex items-center mt-1"><CheckCircle size={18} className="mr-1.5"/> 全班實到</span>
+                          )}
+                          
+                          {record.status === 'absent' && (
+                            <div className="mt-2 w-full">
+                              <span className="text-red-600 font-bold text-sm md:text-base flex items-center mb-2"><XCircle size={18} className="mr-1.5"/> 缺席名單：</span>
+                              <div className="flex flex-wrap">
+                                {record.absentData.map((ab, idx) => (
+                                  <span key={idx} className="inline-block bg-red-50 text-red-700 border border-red-200 px-2.5 py-1.5 rounded-md text-xs md:text-sm font-bold whitespace-nowrap mr-2 mb-2">
+                                    {ab.seatNumber}號 {ab.name} ({ab.leaveType})
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 行政設定區 (Admin Settings) */}
+        {activeTab === 'settings' && (
+          <div className="bg-white rounded-xl shadow-md p-6 max-w-2xl mx-auto border-t-4 border-gray-700 mb-10">
+            <div className="mb-6 flex items-center text-gray-800">
+              <Settings className="mr-2" size={24} />
+              <h2 className="text-xl font-bold">行政設定與產出網址</h2>
+            </div>
+            
+            <div className="space-y-6">
+              <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                <h3 className="font-bold text-gray-700 text-sm border-b pb-2 mb-4">1. 設定今日考試資訊</h3>
+                <div className="flex flex-col md:flex-row gap-4">
+                  <div className="flex-1">
+                    <label className="block text-sm font-bold text-gray-600 mb-1">考試名稱</label>
+                    <input 
+                      type="text" value={examConfig.title} onChange={(e) => setExamConfig({...examConfig, title: e.target.value})}
+                      className="w-full p-2.5 bg-white border border-gray-300 rounded-lg outline-none font-bold text-gray-800 focus:border-teal-500" 
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-sm font-bold text-gray-600 mb-1">日期 / 節次 (選填)</label>
+                    <input 
+                      type="text" value={examConfig.subtitle} onChange={(e) => setExamConfig({...examConfig, subtitle: e.target.value})}
+                      className="w-full p-2.5 bg-white border border-gray-300 rounded-lg outline-none font-bold text-gray-800 focus:border-teal-500" 
+                      placeholder="例如：第一天"
+                    />
                   </div>
                 </div>
               </div>
-            )}
+
+              <div className="bg-white p-4 rounded-lg border border-gray-200">
+                <h3 className="font-bold text-gray-700 text-sm border-b pb-2 mb-4 flex justify-between items-center">
+                  <span>2. 設定應填報班級 (請打勾，取消勾選則不列入看板計算)</span>
+                </h3>
+                <div className="space-y-4">
+                  {Object.entries(groupedAllRecords).map(([groupName, classes]) => (
+                    <div key={groupName} className="bg-gray-50 p-4 rounded-xl border border-gray-200">
+                      <div className="font-black text-teal-800 mb-3 text-lg border-b border-gray-200 pb-2">{groupName}年級</div>
+                      <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+                        {classes.map(c => (
+                          <label key={c.id} className={`flex items-center space-x-2 px-3 py-2.5 rounded-lg border-2 cursor-pointer transition-all ${c.isActive ? 'bg-teal-50 border-teal-500 text-teal-900 shadow-sm' : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300 hover:bg-gray-50'}`}>
+                            <input 
+                              type="checkbox" 
+                              checked={c.isActive} 
+                              onChange={() => toggleClassActive(c.id)} 
+                              className="w-5 h-5 text-teal-600 bg-white border-gray-300 rounded focus:ring-teal-500 focus:ring-2 cursor-pointer accent-teal-600 flex-shrink-0" 
+                            />
+                            <span className="text-sm md:text-base font-bold whitespace-nowrap">{c.name.replace(groupName, '')}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-teal-50 p-4 rounded-lg border border-teal-200">
+                <h3 className="font-bold text-teal-800 text-sm border-b border-teal-200 pb-2 mb-4">3. 產生免登入專屬網址給導師</h3>
+                
+                <button 
+                  onClick={() => {
+                    const fakeId = Math.random().toString(36).substring(2, 8);
+                    setGeneratedLink(`https://school-system.edu.tw/attendance?id=${fakeId}`);
+                    setNotification('✅ 已產生今日專屬網址！(此為模擬示範)');
+                    setTimeout(() => setNotification(''), 3000);
+                  }}
+                  className="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2.5 px-5 rounded-lg transition-colors flex items-center shadow-md"
+                >
+                  <LinkIcon className="mr-2" size={18} /> 產生發布網址
+                </button>
+
+                {generatedLink && (
+                  <div className="animate-in fade-in slide-in-from-top-2 space-y-3 mt-4">
+                    <div className="flex items-center bg-white border-2 border-teal-300 rounded-lg overflow-hidden">
+                      <span className="p-2.5 bg-teal-50 text-teal-700 font-bold text-sm border-r border-teal-300 whitespace-nowrap">網址</span>
+                      <input type="text" readOnly value={generatedLink} className="flex-1 p-2.5 outline-none text-gray-700 font-medium text-sm md:text-base" />
+                      <button 
+                        onClick={() => {
+                          try {
+                            const textArea = document.createElement("textarea");
+                            textArea.value = generatedLink;
+                            textArea.style.position = "fixed";
+                            textArea.style.left = "-9999px";
+                            textArea.style.top = "-9999px";
+                            document.body.appendChild(textArea);
+                            textArea.focus();
+                            textArea.select();
+                            document.execCommand('copy');
+                            document.body.removeChild(textArea);
+                            setNotification('✅ 網址已成功複製到剪貼簿！');
+                          } catch (err) {
+                            console.error('複製失敗:', err);
+                            setNotification('❌ 複製失敗，請手動選取複製。');
+                          }
+                          setTimeout(() => setNotification(''), 3000);
+                        }}
+                        className="p-2.5 md:px-4 bg-teal-100 text-teal-800 hover:bg-teal-200 font-bold flex items-center transition-colors text-sm md:text-base border-l border-teal-300"
+                      >
+                        <Copy size={18} className="mr-1"/> 複製
+                      </button>
+                    </div>
+
+                    <div className="p-4 bg-white border border-teal-200 rounded-lg shadow-sm mt-3">
+                      <div className="flex justify-between items-center mb-2">
+                        <p className="text-sm font-bold text-teal-800 flex items-center">
+                          <MessageSquare size={16} className="mr-1.5" /> 💡 建議發布至群組的文案：
+                        </p>
+                        <button 
+                          onClick={() => {
+                            const textToCopy = `各位導師好，\n今日為【${examConfig.title}${examConfig.subtitle ? ` - ${examConfig.subtitle}` : ''}】\n請於 8:15 前點擊下方專屬網址回報完畢（免登入即可快速填寫）：\n${generatedLink}\n\n※ 若有個別異動同學請直接與教學組連絡。`;
+                            try {
+                              const textArea = document.createElement("textarea");
+                              textArea.value = textToCopy;
+                              textArea.style.position = "fixed";
+                              textArea.style.left = "-9999px";
+                              textArea.style.top = "-9999px";
+                              document.body.appendChild(textArea);
+                              textArea.focus();
+                              textArea.select();
+                              document.execCommand('copy');
+                              document.body.removeChild(textArea);
+                              setNotification('✅ 群組文案已成功複製到剪貼簿！');
+                            } catch (err) {
+                              console.error('複製失敗:', err);
+                              setNotification('❌ 複製失敗，請手動選取複製。');
+                            }
+                            setTimeout(() => setNotification(''), 3000);
+                          }}
+                          className="px-3 py-1.5 bg-teal-600 text-white hover:bg-teal-700 rounded-md text-sm font-bold transition-colors flex items-center shadow-sm"
+                        >
+                          <Copy size={14} className="mr-1"/> 一鍵複製完整文案
+                        </button>
+                      </div>
+                      <textarea 
+                        readOnly 
+                        className="w-full text-sm text-gray-700 bg-gray-50 p-3 rounded-lg outline-none border border-gray-200 resize-none leading-relaxed"
+                        rows="5"
+                        value={`各位導師好，\n今日為【${examConfig.title}${examConfig.subtitle ? ` - ${examConfig.subtitle}` : ''}】\n請於 8:15 前點擊下方專屬網址回報完畢（免登入即可快速填寫）：\n${generatedLink}\n\n※ 若有個別異動同學請直接與教學組連絡。`}
+                      />
+                    </div>
+
+                    <div className="pt-4 mt-4 border-t border-teal-200">
+                      <button 
+                        onClick={() => {
+                          setIsTeacherMode(true);
+                          setActiveTab('report');
+                        }}
+                        className="w-full bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 px-4 rounded-lg transition-colors flex items-center justify-center shadow-md"
+                      >
+                        <Eye className="mr-2" size={20} /> 模擬導師點開網址的畫面
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* [新增] 4. 換日清除資料功能 */}
+              <div className="bg-red-50 p-4 rounded-lg border border-red-200 mt-6">
+                <h3 className="font-bold text-red-800 text-sm border-b border-red-200 pb-2 mb-4 flex items-center">
+                  <AlertTriangle size={16} className="mr-1"/> 4. 換日 / 下一節考試專用 (危險操作)
+                </h3>
+                <button 
+                  onClick={() => setShowResetConfirm(true)}
+                  className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-5 rounded-lg transition-colors flex items-center justify-center shadow-md"
+                >
+                  <Trash2 className="mr-2" size={18} /> 一鍵清除今日所有回報紀錄
+                </button>
+                <p className="text-xs text-red-600 mt-3 font-medium leading-relaxed">
+                  ※ 進行第二天或下一堂考試前，請點擊此按鈕將全校狀態恢復為「尚未回報」，方便導師重新填寫。<br/>
+                  (您的班級勾選設定與考試名稱會保留，只有出席資料會被清空)
+                </p>
+              </div>
+            </div>
           </div>
-        </div>
-      );
-    };
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App />);
-  </script>
-</body>
-</html>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default App;
