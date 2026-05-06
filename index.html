@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>段考出缺席回報系統</title>
   
-  <!-- 載入必要的網頁套件與確保無亂碼的設定 -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
@@ -30,7 +29,6 @@
 
     const { useState, useRef, useEffect } = React;
 
-    // === 您的 Firebase 金鑰 ===
     const firebaseConfig = {
       apiKey: "AIzaSyBJr9E7Rz2vduTDy8qiswq8dqCpZjLqkJw",
       authDomain: "ynhs-test.firebaseapp.com",
@@ -45,7 +43,6 @@
     const auth = getAuth(app);
     const db = getFirestore(app);
 
-    // === 圖示元件 ===
     const Icon = ({ name, className = '', size = 16 }) => {
       const fontSize = typeof size === 'number' ? `${size}px` : size;
       return <i className={`fa-solid fa-${name} ${className}`} style={{ fontSize }}></i>;
@@ -76,8 +73,8 @@
       const jhGrades = ['三', '二', '一'];
       const jhNames = ['忠', '孝', '仁', '愛', '信', '義', '和', '平'];
       const classes = [];
-      hsGrades.forEach(g => { hsNames.forEach((n, idx) => { classes.push({ id: `H${g}-${idx}`, group: `高${g}`, name: `高${g}${n}`, status: 'pending', detail: '', absentData: [], isActive: true }); }); });
-      jhGrades.forEach(g => { jhNames.forEach((n, idx) => { classes.push({ id: `J${g}-${idx}`, group: `國${g}`, name: `國${g}${n}`, status: 'pending', detail: '', absentData: [], isActive: true }); }); });
+      hsGrades.forEach(g => { hsNames.forEach((n, idx) => { classes.push({ id: `H${g}-${idx}`, group: `高${g}`, name: `高${g}${n}`, status: 'pending', detail: '', absentData: [], makeupData: [], isActive: true }); }); });
+      jhGrades.forEach(g => { jhNames.forEach((n, idx) => { classes.push({ id: `J${g}-${idx}`, group: `國${g}`, name: `國${g}${n}`, status: 'pending', detail: '', absentData: [], makeupData: [], isActive: true }); }); });
       return classes;
     };
 
@@ -89,9 +86,12 @@
       const [isReady, setIsReady] = useState(false);
       const [user, setUser] = useState(null);
       const [notification, setNotification] = useState('');
+      
       const [isExporting, setIsExporting] = useState(false);
+      const [exportSection, setExportSection] = useState('all'); 
       const [exportTimeStr, setExportTimeStr] = useState(''); 
       const [previewImage, setPreviewImage] = useState(null); 
+      
       const [showResetConfirm, setShowResetConfirm] = useState(false);
 
       const [records, setRecords] = useState(generateClasses());
@@ -102,6 +102,8 @@
       const [selectedClass, setSelectedClass] = useState('H3-0'); 
       const [attendanceMode, setAttendanceMode] = useState('all_present'); 
       const [absentList, setAbsentList] = useState([{ seatNumber: '', name: '', leaveType: '事假' }]);
+      const [hasMakeup, setHasMakeup] = useState(false);
+      const [makeupList, setMakeupList] = useState([{ seatNumber: '', name: '' }]);
 
       useEffect(() => {
         const initAuth = async () => {
@@ -156,8 +158,19 @@
           if (currentRecord.status === 'absent' && currentRecord.absentData?.length > 0) {
             setAbsentList(currentRecord.absentData);
           } else { setAbsentList([{ seatNumber: '', name: '', leaveType: '事假' }]); }
+          
+          if (currentRecord.makeupData && currentRecord.makeupData.length > 0) {
+            setHasMakeup(true);
+            setMakeupList(currentRecord.makeupData);
+          } else {
+            setHasMakeup(false);
+            setMakeupList([{ seatNumber: '', name: '' }]);
+          }
         } else {
-          setAttendanceMode('all_present'); setAbsentList([{ seatNumber: '', name: '', leaveType: '事假' }]);
+          setAttendanceMode('all_present'); 
+          setAbsentList([{ seatNumber: '', name: '', leaveType: '事假' }]);
+          setHasMakeup(false);
+          setMakeupList([{ seatNumber: '', name: '' }]);
         }
       }, [selectedClass, records]);
 
@@ -167,15 +180,35 @@
       const addAbsentRow = () => setAbsentList([...absentList, { seatNumber: '', name: '', leaveType: '事假' }]);
       const removeAbsentRow = (index) => setAbsentList(absentList.filter((_, i) => i !== index));
 
+      const handleMakeupChange = (index, field, value) => {
+        const newList = [...makeupList]; newList[index][field] = value; setMakeupList(newList);
+      };
+      const addMakeupRow = () => setMakeupList([...makeupList, { seatNumber: '', name: '' }]);
+      const removeMakeupRow = (index) => setMakeupList(makeupList.filter((_, i) => i !== index));
+
       const handleSubmit = (e) => {
         e.preventDefault();
         const now = new Date();
         const timeString = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+        
         let validAbsents = [];
         if (attendanceMode === 'absent') validAbsents = absentList.filter(item => item.seatNumber.toString().trim() !== '');
 
+        let validMakeups = [];
+        if (attendanceMode === 'all_present' && hasMakeup) {
+          validMakeups = makeupList.filter(item => item.seatNumber.toString().trim() !== '');
+        }
+
         const newRecords = records.map(record => {
-          if (record.id === selectedClass) return { ...record, status: attendanceMode, absentData: validAbsents, time: timeString };
+          if (record.id === selectedClass) { 
+            return { 
+              ...record, 
+              status: attendanceMode, 
+              absentData: validAbsents, 
+              makeupData: validMakeups,
+              time: timeString 
+            };
+          }
           return record;
         });
 
@@ -199,9 +232,14 @@
         setRecords(newRecords); syncToCloud('records', newRecords);
       };
 
-      const handleExportImage = () => {
+      const handleExportImage = (section) => {
         if (!window.html2canvas) return;
-        setIsExporting(true); setNotification('正在產生圖片中...');
+        setIsExporting(true); 
+        setExportSection(section);
+        
+        const sectionName = section === 'high' ? '高中部' : section === 'junior' ? '國中部' : '全校';
+        setNotification(`正在產生【${sectionName}】圖片中...`);
+        
         const now = new Date();
         setExportTimeStr(`${now.getFullYear()}年${now.getMonth()+1}月${now.getDate()}日 ${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`);
         
@@ -209,10 +247,16 @@
           if (boardRef.current) {
             window.html2canvas(boardRef.current, { scale: 2, backgroundColor: '#f9fafb', useCORS: true, logging: false }).then(canvas => {
               setPreviewImage(canvas.toDataURL('image/png')); 
-              setIsExporting(false); setNotification('');
-            }).catch(err => { setIsExporting(false); setNotification('❌ 圖片產生失敗'); });
+              setIsExporting(false); 
+              setExportSection('all'); 
+              setNotification('');
+            }).catch(err => { 
+              setIsExporting(false); 
+              setExportSection('all');
+              setNotification('❌ 圖片產生失敗'); 
+            });
           }
-        }, 500); 
+        }, 800); 
       };
 
       const confirmReset = () => {
@@ -220,6 +264,7 @@
           ...r,
           status: 'pending',
           absentData: [],
+          makeupData: [],
           time: '',
           detail: ''
         }));
@@ -245,14 +290,31 @@
       }
 
       const activeRecords = records.filter(r => r.isActive);
+      const visibleRecords = activeRecords.filter(r => {
+        if (exportSection === 'high') return r.group.includes('高');
+        if (exportSection === 'junior') return r.group.includes('國');
+        return true;
+      });
+
       const summary = {
-        total: activeRecords.length, reported: activeRecords.filter(r => r.status !== 'pending').length,
-        allPresent: activeRecords.filter(r => r.status === 'all_present').length, hasAbsent: activeRecords.filter(r => r.status === 'absent').length,
-        pending: activeRecords.filter(r => r.status === 'pending').length,
+        total: visibleRecords.length, 
+        reported: visibleRecords.filter(r => r.status !== 'pending').length,
+        allPresent: visibleRecords.filter(r => r.status === 'all_present').length, 
+        hasAbsent: visibleRecords.filter(r => r.status === 'absent').length,
+        pending: visibleRecords.filter(r => r.status === 'pending').length,
       };
 
-      const groupedActiveRecords = activeRecords.reduce((acc, curr) => { if (!acc[curr.group]) acc[curr.group] = []; acc[curr.group].push(curr); return acc; }, {});
-      const groupedAllRecords = records.reduce((acc, curr) => { if (!acc[curr.group]) acc[curr.group] = []; acc[curr.group].push(curr); return acc; }, {});
+      const groupedVisibleRecords = visibleRecords.reduce((acc, curr) => { 
+        if (!acc[curr.group]) acc[curr.group] = []; 
+        acc[curr.group].push(curr); 
+        return acc; 
+      }, {});
+
+      const groupedAllRecords = records.reduce((acc, curr) => { 
+        if (!acc[curr.group]) acc[curr.group] = []; 
+        acc[curr.group].push(curr); 
+        return acc; 
+      }, {});
 
       return (
         <div className="min-h-screen bg-gray-50 text-gray-800 pb-10">
@@ -293,7 +355,6 @@
               </div>
             )}
 
-            {/* 清除資料確認視窗 */}
             {showResetConfirm && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 p-4">
                 <div className="bg-white rounded-xl w-full max-w-md flex flex-col shadow-2xl overflow-hidden z-[60]">
@@ -322,7 +383,6 @@
               </div>
             )}
 
-            {/* 圖片預覽彈出視窗 */}
             {previewImage && (
               <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80 p-4">
                 <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col relative shadow-2xl">
@@ -354,6 +414,7 @@
               </div>
             )}
 
+            {/* ======= 導師回報區 ======= */}
             {activeTab === 'report' && (
                <div className="bg-white rounded-xl shadow-md p-6 max-w-md mx-auto border-t-4 border-teal-600">
                <div className="mb-4">
@@ -365,13 +426,17 @@
                  <div>
                    <label className="block text-sm font-bold text-gray-700 mb-2">1. 您的班級</label>
                    <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} className="w-full border-2 border-gray-300 rounded-lg p-3 bg-white focus:ring-0 focus:border-teal-500 outline-none text-lg font-medium">
-                     {Object.entries(groupedActiveRecords).map(([groupName, classes]) => (
-                       <optgroup key={groupName} label={`${groupName}年級`}>
-                         {classes.map(c => (
-                           <option key={c.id} value={c.id}>{c.name} {c.status !== 'pending' ? '(已填報)' : ''}</option>
-                         ))}
-                       </optgroup>
-                     ))}
+                     {Object.entries(groupedAllRecords).map(([groupName, classes]) => {
+                       const activeInGroup = classes.filter(c => c.isActive);
+                       if (activeInGroup.length === 0) return null;
+                       return (
+                         <optgroup key={groupName} label={`${groupName}年級`}>
+                           {activeInGroup.map(c => (
+                             <option key={c.id} value={c.id}>{c.name} {c.status !== 'pending' ? '(已填報)' : ''}</option>
+                           ))}
+                         </optgroup>
+                       );
+                     })}
                    </select>
                  </div>
 
@@ -388,6 +453,44 @@
                      </button>
                    </div>
                  </div>
+
+                 {attendanceMode === 'all_present' && (
+                   <div className="mt-4 bg-blue-50 p-4 rounded-xl border border-blue-200 shadow-inner">
+                     <label className="flex items-center space-x-3 cursor-pointer select-none">
+                       <input 
+                         type="checkbox" 
+                         checked={hasMakeup} 
+                         onChange={(e) => setHasMakeup(e.target.checked)} 
+                         className="w-5 h-5 text-blue-600 bg-white border-gray-300 rounded focus:ring-blue-500 cursor-pointer" 
+                       />
+                       <span className="font-bold text-blue-800 text-sm md:text-base">有學生在「教務處」補考 (若無請略過)</span>
+                     </label>
+
+                     {hasMakeup && (
+                       <div className="mt-4 space-y-3">
+                         <div className="text-sm font-bold text-blue-700 mb-2 border-b border-blue-200 pb-1">請輸入補考學生資料</div>
+                         {makeupList.map((item, index) => (
+                           <div key={index} className="flex gap-2 items-center">
+                             <div className="w-20 flex-shrink-0">
+                               <input type="number" min="1" max="99" value={item.seatNumber} onChange={(e) => handleMakeupChange(index, 'seatNumber', e.target.value)} className="w-full p-2.5 bg-white border border-blue-300 rounded-lg outline-none text-center font-bold text-gray-700 focus:ring-2 focus:ring-blue-400" placeholder="座號" required />
+                             </div>
+                             <div className="flex-1">
+                               <input type="text" value={item.name} onChange={(e) => handleMakeupChange(index, 'name', e.target.value)} className="w-full p-2.5 bg-white border border-blue-300 rounded-lg outline-none font-bold text-gray-700 focus:ring-2 focus:ring-blue-400" placeholder="姓名" required />
+                             </div>
+                             {makeupList.length > 1 && (
+                               <button type="button" onClick={() => removeMakeupRow(index)} className="p-2.5 text-red-500 hover:bg-red-50 border border-transparent hover:border-red-200 rounded-lg transition-colors flex-shrink-0">
+                                 <Trash2 size={20} />
+                               </button>
+                             )}
+                           </div>
+                         ))}
+                         <button type="button" onClick={addMakeupRow} className="w-full py-2.5 border-2 border-dashed border-blue-300 text-blue-700 bg-white rounded-lg font-bold flex items-center justify-center hover:bg-blue-100 transition-colors text-sm mt-2">
+                           <Plus size={16} className="mr-1" /> 新增下一位補考學生
+                         </button>
+                       </div>
+                     )}
+                   </div>
+                 )}
 
                  {attendanceMode === 'absent' && (
                    <div className="space-y-3 bg-red-50 p-3 md:p-5 rounded-xl border border-red-100 shadow-inner">
@@ -436,129 +539,188 @@
              </div>
             )}
 
+            {/* ======= 全校看板區 ======= */}
             {activeTab === 'dashboard' && (
               <div className="space-y-4">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-2 gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-200">
-                  <div className="flex-1">
+                
+                <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-2 gap-4 bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                  <div className="flex-1 w-full">
                     <h3 className="text-sm font-bold text-orange-800 mb-2 flex items-center"><FileText size={16} className="mr-1.5" /> 匯出前設定：點選今日需收回考卷的年段</h3>
                     <div className="flex flex-wrap gap-2">
                       {Object.keys(collectPaperGrades).map(grade => (
-                        <label key={grade} className={`flex items-center space-x-1.5 px-4 py-2 rounded-lg border-2 cursor-pointer transition-all text-sm md:text-base ${collectPaperGrades[grade] ? 'bg-orange-100 border-orange-500 text-orange-900 shadow-sm font-bold' : 'bg-white border-gray-200 text-gray-500 hover:bg-orange-50 hover:border-orange-200'}`}>
+                        <label key={grade} className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border-2 cursor-pointer transition-all text-sm ${collectPaperGrades[grade] ? 'bg-orange-100 border-orange-500 text-orange-900 shadow-sm font-bold' : 'bg-white border-gray-200 text-gray-500 hover:bg-orange-50 hover:border-orange-200'}`}>
                           <input type="checkbox" checked={collectPaperGrades[grade]} onChange={() => toggleCollectPaperGrade(grade)} className="hidden" />
                           <span>{grade}</span>
                         </label>
                       ))}
                     </div>
                   </div>
-                  <div className="flex-shrink-0 w-full md:w-auto">
-                    <button onClick={handleExportImage} disabled={isExporting} className="w-full md:w-auto bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-lg shadow-md flex items-center justify-center transition-colors disabled:bg-gray-400 text-sm md:text-base">
-                      <Camera size={20} className="mr-2" /> {isExporting ? '產生中...' : '匯出並預覽圖片'}
+                  
+                  <div className="flex flex-col sm:flex-row gap-2 w-full xl:w-auto mt-2 xl:mt-0">
+                    <button onClick={() => handleExportImage('high')} disabled={isExporting} className="bg-teal-600 hover:bg-teal-700 text-white font-bold py-2.5 px-4 rounded-lg shadow-md flex items-center justify-center transition-colors disabled:bg-gray-400 text-sm">
+                      <Camera size={18} className="mr-1.5" /> 匯出高中部
+                    </button>
+                    <button onClick={() => handleExportImage('junior')} disabled={isExporting} className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 px-4 rounded-lg shadow-md flex items-center justify-center transition-colors disabled:bg-gray-400 text-sm">
+                      <Camera size={18} className="mr-1.5" /> 匯出國中部
+                    </button>
+                    <button onClick={() => handleExportImage('all')} disabled={isExporting} className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2.5 px-4 rounded-lg shadow-md flex items-center justify-center transition-colors disabled:bg-gray-400 text-sm">
+                      <Camera size={18} className="mr-1.5" /> 匯出全校
                     </button>
                   </div>
                 </div>
 
-                <div ref={boardRef} className="space-y-6 bg-gray-50 p-2 md:p-6 -mx-2 md:-mx-6 rounded-xl relative">
+                <div ref={boardRef} className="space-y-3 bg-gray-50 p-3 md:p-5 -mx-2 md:-mx-4 rounded-xl relative">
+                  
+                  {/* === 確保不破圖：上方標題區塊 === */}
                   {isExporting && (
-                    <div className="text-center pb-4 border-b-4 border-teal-600 mb-4 bg-white p-4 rounded-xl shadow-sm">
-                      <div className="flex items-center justify-center mb-3 flex-wrap">
-                        <h2 className="text-3xl md:text-4xl font-black text-teal-800 tracking-wide mr-3 leading-tight">{examConfig.title}</h2>
-                        {examConfig.subtitle && <span className="bg-gray-100 text-gray-600 px-3 py-1.5 rounded-md text-2xl md:text-3xl font-bold mr-3 leading-tight">{examConfig.subtitle}</span>}
-                        <h2 className="text-3xl md:text-4xl font-black text-teal-800 tracking-wide leading-tight">出缺席總表</h2>
+                    <div className="text-center pb-3 border-b-4 border-teal-600 mb-3 bg-white p-3 rounded-xl shadow-sm">
+                      <div className="flex items-center justify-center mb-2 flex-wrap">
+                        <h2 className="text-2xl md:text-3xl font-black text-teal-800 tracking-wide mr-2">
+                          {examConfig.title}
+                          {exportSection === 'high' ? ' (高中部)' : exportSection === 'junior' ? ' (國中部)' : ''}
+                        </h2>
+                        {examConfig.subtitle && (
+                          <span className="inline-block bg-gray-100 text-gray-600 px-3 pt-[2px] pb-[6px] rounded-md text-xl md:text-2xl font-bold mr-2 align-middle">
+                            {examConfig.subtitle}
+                          </span>
+                        )}
+                        <h2 className="text-2xl md:text-3xl font-black text-teal-800 tracking-wide">出缺席總表</h2>
                       </div>
-                      <div className="inline-block bg-teal-700 text-white px-4 py-1.5 rounded-full text-base md:text-lg font-bold shadow-sm mt-1">
-                        <CalendarClock className="inline-block align-text-bottom mr-1.5 mb-[2px]" size={18} />
-                        <span className="inline-block align-middle leading-none">製表時間：{exportTimeStr}</span>
-                      </div>
+                      <span className="inline-block bg-teal-700 text-white px-4 pt-[2px] pb-[6px] rounded-full text-xs md:text-sm font-bold shadow-sm align-middle">
+                        <CalendarClock className="inline-block align-middle mr-1.5 mb-[2px]" size={14} />
+                        <span className="inline-block align-middle">製表時間：{exportTimeStr}</span>
+                      </span>
                     </div>
                   )}
 
-                  <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
-                    <div className="flex justify-between items-center mb-4">
-                      <div>
-                        <h3 className="text-gray-500 text-sm md:text-base font-bold mb-1">全校回報進度</h3>
-                        <p className="text-3xl md:text-4xl font-black text-gray-800">{summary.reported} <span className="text-xl md:text-2xl text-gray-400 font-normal">/ {summary.total} 班</span></p>
+                  {/* === 確保不破圖：統計區塊 === */}
+                  <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                    <div className="flex justify-between items-center mb-3">
+                      <div className="flex items-baseline space-x-2">
+                        <h3 className="text-gray-500 text-sm font-bold">{exportSection === 'all' ? '全校' : exportSection === 'high' ? '高中部' : '國中部'}回報進度</h3>
+                        <p className="text-xl md:text-2xl font-black text-gray-800">{summary.reported} <span className="text-sm text-gray-400 font-normal">/ {summary.total} 班</span></p>
                       </div>
-                      <div className="flex flex-col items-end">
-                        <span className="inline-block px-4 py-1.5 bg-red-100 text-red-700 rounded-full text-sm font-bold mb-2">缺考班級: {summary.hasAbsent}</span>
-                        <span className="inline-block px-4 py-1.5 bg-gray-100 text-gray-600 rounded-full text-sm font-bold">未回報: {summary.pending}</span>
+                      <div className="flex items-center space-x-2">
+                        <span className="inline-block px-3 pt-[1px] pb-[5px] bg-red-100 text-red-700 rounded-full text-[11px] md:text-xs font-bold shadow-sm align-middle">
+                          缺考: {summary.hasAbsent}
+                        </span>
+                        <span className="inline-block px-3 pt-[1px] pb-[5px] bg-gray-100 text-gray-600 rounded-full text-[11px] md:text-xs font-bold shadow-sm align-middle">
+                          未回報: {summary.pending}
+                        </span>
                       </div>
                     </div>
-                    <div className="w-full bg-gray-200 rounded-full h-3 mt-2 overflow-hidden flex shadow-inner">
-                      <div className="bg-green-500 h-3 transition-all duration-500" style={{ width: `${(summary.allPresent / summary.total) * 100}%` }}></div>
-                      <div className="bg-red-500 h-3 transition-all duration-500" style={{ width: `${(summary.hasAbsent / summary.total) * 100}%` }}></div>
+                    <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden flex shadow-inner">
+                      <div className="bg-green-500 h-2.5 transition-all duration-500" style={{ width: summary.total > 0 ? `${(summary.allPresent / summary.total) * 100}%` : '0%' }}></div>
+                      <div className="bg-red-500 h-2.5 transition-all duration-500" style={{ width: summary.total > 0 ? `${(summary.hasAbsent / summary.total) * 100}%` : '0%' }}></div>
                     </div>
                   </div>
 
+                  {/* 行政追蹤專區 */}
                   {!isExporting && (
-                    <div className="bg-blue-50 p-4 md:p-5 rounded-xl shadow-sm border border-blue-200">
-                      <h3 className="font-bold text-blue-800 mb-3 flex items-center text-sm md:text-base">
-                        <Info size={18} className="mr-1.5" /> 行政追蹤專區 (此區塊不會出現在輸出的圖片)
+                    <div className="bg-blue-50 p-4 rounded-xl shadow-sm border border-blue-200">
+                      <h3 className="font-bold text-blue-800 mb-2 flex items-center text-sm">
+                        <Info size={16} className="mr-1.5" /> 行政追蹤專區 (此區塊不會出現在輸出的圖片)
                       </h3>
-                      <div className="flex flex-col md:flex-row gap-4">
-                        <div className="flex-1 bg-white p-3 md:p-4 rounded-lg border border-blue-100">
-                          <h4 className="text-sm font-bold text-gray-500 mb-3 border-b pb-2">尚未回報班級 ({summary.pending})</h4>
-                          <div className="flex flex-wrap gap-2">
-                            {activeRecords.filter(r => r.status === 'pending').map(r => (
-                              <span key={`tracking-${r.id}`} className="bg-gray-100 text-gray-600 px-2.5 py-1 rounded-md text-sm font-medium">{r.name}</span>
+                      <div className="flex flex-col md:flex-row gap-3">
+                        <div className="flex-1 bg-white p-3 rounded-lg border border-blue-100">
+                          <h4 className="text-xs font-bold text-gray-500 mb-2 border-b pb-1.5">尚未回報班級 ({summary.pending})</h4>
+                          <div className="flex flex-wrap gap-1.5">
+                            {visibleRecords.filter(r => r.status === 'pending').map(r => (
+                              <span key={`tracking-${r.id}`} className="inline-block bg-gray-100 text-gray-600 px-2 pt-[1px] pb-[5px] rounded-md text-[11px] md:text-xs font-medium">
+                                {r.name}
+                              </span>
                             ))}
-                            {summary.pending === 0 && <span className="text-sm text-green-600 font-bold">全校皆已回報！</span>}
+                            {summary.pending === 0 && <span className="text-xs text-green-600 font-bold">完全回報完畢！</span>}
                           </div>
                         </div>
-                        <div className="flex-1 bg-white p-3 md:p-4 rounded-lg border border-blue-100">
-                          <h4 className="text-sm font-bold text-red-500 mb-3 border-b pb-2">有缺考學生的班級 ({summary.hasAbsent})</h4>
-                          <div className="flex flex-wrap gap-2">
-                            {activeRecords.filter(r => r.status === 'absent').map(r => (
-                              <span key={`tracking-absent-${r.id}`} className="bg-red-50 text-red-600 border border-red-100 px-2.5 py-1 rounded-md text-sm font-bold">{r.name}</span>
+                        <div className="flex-1 bg-white p-3 rounded-lg border border-blue-100">
+                          <h4 className="text-xs font-bold text-red-500 mb-2 border-b pb-1.5">有缺考學生的班級 ({summary.hasAbsent})</h4>
+                          <div className="flex flex-wrap gap-1.5">
+                            {visibleRecords.filter(r => r.status === 'absent').map(r => (
+                              <span key={`tracking-absent-${r.id}`} className="inline-block bg-red-50 text-red-600 border border-red-100 px-2 pt-[1px] pb-[5px] rounded-md text-[11px] md:text-xs font-bold">
+                                {r.name}
+                              </span>
                             ))}
-                            {summary.hasAbsent === 0 && <span className="text-sm text-gray-400">目前無缺考班級</span>}
+                            {summary.hasAbsent === 0 && <span className="text-xs text-gray-400">目前無缺考班級</span>}
                           </div>
                         </div>
                       </div>
                     </div>
                   )}
 
+                  {/* 需收回考卷年段 */}
                   {Object.values(collectPaperGrades).some(v => v) && (
                     <div className="bg-orange-50 rounded-xl shadow-sm border border-orange-200 overflow-hidden break-inside-avoid">
                       <div className="border-b-2 border-orange-200 bg-orange-50">
-                        <div className="inline-block bg-orange-100 px-5 py-2.5 rounded-br-2xl border-r border-b border-orange-200">
-                          <FileText className="inline-block mr-1.5 align-middle text-orange-800 mb-[2px]" size={20} />
-                          <span className="inline-block align-middle font-bold text-orange-800 text-lg md:text-xl leading-normal">今日需收回考卷年段</span>
-                        </div>
+                        <span className="inline-block bg-orange-100 px-4 pt-[4px] pb-[8px] rounded-br-xl border-r border-b border-orange-200 align-middle">
+                          <FileText className="inline-block align-middle mr-1.5 text-orange-800 mb-[2px]" size={16} />
+                          <span className="inline-block align-middle font-bold text-orange-800 text-sm md:text-base">今日需收回考卷年段</span>
+                        </span>
                       </div>
-                      <div className="p-4">
+                      <div className="p-3">
                         <div className="flex flex-wrap gap-2">
-                          {Object.entries(collectPaperGrades).filter(([_, isChecked]) => isChecked).map(([grade]) => (
-                              <span key={grade} className="inline-block bg-orange-600 text-white px-5 py-2 rounded-lg text-lg md:text-xl font-bold shadow-sm mr-2 mb-1">{grade}年級</span>
+                          {Object.entries(collectPaperGrades).filter(([grade, isChecked]) => {
+                            if (!isChecked) return false;
+                            if (exportSection === 'high') return grade.includes('高');
+                            if (exportSection === 'junior') return grade.includes('國');
+                            return true;
+                          }).map(([grade]) => (
+                              <span key={grade} className="inline-block bg-orange-600 text-white px-3 pt-[2px] pb-[6px] rounded-lg text-sm md:text-base font-bold shadow-sm mr-1 mb-1">
+                                {grade}年級
+                              </span>
                           ))}
                         </div>
                       </div>
                     </div>
                   )}
 
-                  <div className="space-y-6">
-                    {Object.entries(groupedActiveRecords).map(([groupName, classes]) => (
+                  {/* === 確保不破圖：各年級看板區塊 === */}
+                  <div className="space-y-4">
+                    {Object.entries(groupedVisibleRecords).map(([groupName, classes]) => (
                       <div key={groupName} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden break-inside-avoid">
                         <div className="border-b-2 border-teal-600 bg-teal-50">
-                          <div className="inline-block bg-teal-700 px-6 py-2.5 rounded-br-2xl shadow-sm">
-                            <span className="inline-block font-bold text-white tracking-wider text-xl md:text-2xl align-middle leading-normal">{groupName}年級</span>
-                          </div>
+                          <span className="inline-block bg-teal-700 text-white px-5 pt-[6px] pb-[10px] rounded-br-xl shadow-sm align-middle">
+                            <span className="inline-block align-middle font-bold text-base md:text-lg tracking-wider">{groupName}年級</span>
+                          </span>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-0">
                           {classes.map(record => (
-                            <div key={record.id} className="p-4 md:p-5 border-b md:border-r border-gray-200 flex flex-col justify-start">
-                              <div className="flex items-center justify-between w-full mb-3">
-                                <span className="font-black text-gray-800 text-xl md:text-2xl">{record.name.replace(groupName, '')}班</span>
-                                {record.time && <span className="text-sm text-gray-500 font-medium bg-gray-100 px-2.5 py-1 rounded-full"><Clock size={14} className="inline mr-1 mb-0.5"/>{record.time}</span>}
+                            <div key={record.id} className="p-3 md:p-4 border-b md:border-r border-gray-200 flex flex-col justify-start">
+                              
+                              <div className="flex items-center justify-between w-full mb-2">
+                                <span className="font-black text-gray-800 text-lg">{record.name.replace(groupName, '')}班</span>
+                                {record.time && (
+                                  <span className="inline-block text-[10px] md:text-xs text-gray-500 font-medium bg-gray-100 px-2 pt-[1px] pb-[4px] rounded-full align-middle">
+                                    <Clock size={10} className="inline-block align-middle mr-1 mb-[1px]"/>
+                                    <span className="inline-block align-middle">{record.time}</span>
+                                  </span>
+                                )}
                               </div>
                               
-                              {record.status === 'pending' && <span className="text-gray-400 text-sm md:text-base font-bold flex items-center mt-1"><span className="w-2.5 h-2.5 bg-gray-300 rounded-full mr-2"></span> 尚未回報</span>}
-                              {record.status === 'all_present' && <span className="text-green-600 font-bold text-sm md:text-base flex items-center mt-1"><CheckCircle size={18} className="mr-1.5"/> 全班實到</span>}
+                              {record.status === 'pending' && <span className="text-gray-400 text-sm font-bold flex items-center mt-1"><span className="w-2 h-2 bg-gray-300 rounded-full mr-2"></span> 尚未回報</span>}
+                              
+                              {record.status === 'all_present' && (
+                                <div className="mt-1 w-full flex flex-col">
+                                  <span className="text-green-600 font-bold text-sm flex items-center"><CheckCircle size={16} className="mr-1.5"/> 全班實到</span>
+                                  {record.makeupData && record.makeupData.length > 0 && (
+                                    <div className="flex flex-wrap mt-2 pt-2 border-t border-gray-100">
+                                      <span className="text-blue-700 font-bold text-xs flex items-center w-full mb-1.5"><Info size={14} className="mr-1"/> 教務處補考：</span>
+                                      {record.makeupData.map((mk, idx) => (
+                                        <span key={`mk-${idx}`} className="inline-block bg-blue-50 text-blue-700 border border-blue-200 px-2 pt-[2px] pb-[6px] rounded-md text-xs font-bold mr-1.5 mb-1.5">
+                                          {mk.seatNumber}號 {mk.name}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                              
                               {record.status === 'absent' && (
-                                <div className="mt-2 w-full">
-                                  <span className="text-red-600 font-bold text-sm md:text-base flex items-center mb-2"><XCircle size={18} className="mr-1.5"/> 缺席名單：</span>
+                                <div className="mt-1 w-full">
+                                  <span className="text-red-600 font-bold text-sm flex items-center mb-2"><XCircle size={16} className="mr-1.5"/> 缺席名單：</span>
                                   <div className="flex flex-wrap">
                                     {record.absentData.map((ab, idx) => (
-                                      <span key={idx} className="inline-block bg-red-50 text-red-700 border border-red-200 px-2.5 py-1.5 rounded-md text-xs md:text-sm font-bold whitespace-nowrap mr-2 mb-2">
+                                      <span key={idx} className={`inline-block border px-2 pt-[2px] pb-[6px] rounded-md text-xs font-bold mr-1.5 mb-1.5 ${ab.leaveType === '教務處補考' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
                                         {ab.seatNumber}號 {ab.name} ({ab.leaveType})
                                       </span>
                                     ))}
@@ -575,6 +737,7 @@
               </div>
             )}
 
+            {/* ======= 行政設定區 ======= */}
             {activeTab === 'settings' && (
               <div className="bg-white rounded-xl shadow-md p-6 max-w-2xl mx-auto border-t-4 border-gray-700 mb-10">
                 <div className="mb-6 flex items-center text-gray-800">
@@ -673,7 +836,6 @@
                     )}
                   </div>
 
-                  {/* 4. 換日清除資料功能 */}
                   <div className="bg-red-50 p-4 rounded-lg border border-red-200 mt-6">
                     <h3 className="font-bold text-red-800 text-sm border-b border-red-200 pb-2 mb-4 flex items-center">
                       <AlertTriangle size={16} className="mr-1"/> 4. 換日 / 下一節考試專用 (危險操作)
